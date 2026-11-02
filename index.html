@@ -282,7 +282,15 @@ input[type=color]::-webkit-color-swatch{border:0;border-radius:3px}
     <button class="btn" data-cmd="transform">自由変形</button>
     <span class="note">自由変形は Alt+T（全画面表示中は Ctrl+T）。Ctrl+クリックでレイヤーを選択、Alt+ドラッグで複製、矢印キーで 1px 移動</span>
   </div>
-  <div class="opt" data-for="marquee lasso">
+  <div class="opt" data-for="wand">
+    <div class="grp"><label for="optWandMode">方式</label><select id="optWandMode"><option value="wand">自動選択（色をクリック）</option><option value="quick">クイック選択（なぞる）</option></select></div>
+    <div class="grp" data-wandmode="quick"><label for="optQSize">サイズ</label><input type="range" id="optQSize" min="2" max="300"><output id="optQSizeVal" class="num"></output></div>
+    <div class="grp" data-wandmode="wand"><label for="optWTol">許容値</label><input type="range" id="optWTol" min="0" max="255"><output id="optWTolVal" class="num"></output></div>
+    <label class="check" data-wandmode="wand"><input type="checkbox" id="optWAA"> アンチエイリアス</label>
+    <label class="check" data-wandmode="wand"><input type="checkbox" id="optWContig"> 隣接</label>
+    <label class="check"><input type="checkbox" id="optWAll"> 全レイヤーを対象</label>
+  </div>
+  <div class="opt" data-for="marquee lasso wand">
     <div class="seg" role="group" aria-label="選択の方法">
       <button data-selmode="new" title="新規選択" aria-label="新規選択"><svg class="i" viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="1"/></svg></button>
       <button data-selmode="add" title="選択範囲に追加（Shift）" aria-label="選択範囲に追加"><svg class="i" viewBox="0 0 24 24"><rect x="3" y="3" width="11" height="11" rx="1"/><rect x="10" y="10" width="11" height="11" rx="1" fill="currentColor" fill-opacity=".35"/></svg></button>
@@ -413,6 +421,7 @@ const S={
   text:{size:72,family:'sans',bold:true,italic:false,underline:false,strike:false,align:'left',leading:0,tracking:0,vertical:false,strokeW:0,strokeColor:'#000000'},
   pick:{all:true},
   marq:{shape:'rect'},lasso:{mode:'free'},selMode:'new',
+  wand:{mode:'wand',tol:32,aa:true,contig:true,all:false,size:30},
   move:{auto:false},
   cropRatio:'free',
 };
@@ -543,6 +552,7 @@ function render(){
     vctx.setLineDash([4/z,4/z]);vctx.lineDashOffset=-antsOffset/z;vctx.strokeStyle='#fff';vctx.stroke(P);vctx.restore();
   }
   if(drag&&drag.tool==='marquee'&&drag.shape){const s=drag.shape;dashed(()=>{vctx.beginPath();const[a,b]=toScreen(s.x,s.y);if(s.type==='ellipse')vctx.ellipse(a+s.w*z/2,b+s.h*z/2,s.w*z/2,s.h*z/2,0,0,Math.PI*2);else vctx.rect(Math.round(a)+.5,Math.round(b)+.5,Math.round(s.w*z),Math.round(s.h*z));});}
+  if(drag&&drag.tool==='wand'&&drag.ov){vctx.save();vctx.globalAlpha=.4;vctx.imageSmoothingEnabled=z<2;vctx.drawImage(drag.ov,x,y,dw,dh);vctx.restore();}
   if(drag&&drag.tool==='lasso'&&drag.pts&&drag.pts.length>1)dashed(()=>{vctx.beginPath();drag.pts.forEach(([px,py],i)=>{const[a,b]=toScreen(px,py);i?vctx.lineTo(a,b):vctx.moveTo(a,b);});vctx.closePath();});
   if(polyDraft){
     const pts=polyDraft.pts,l=pts[pts.length-1];
@@ -555,8 +565,9 @@ function render(){
     [[a,b],[c,d]].forEach(([p,q])=>{vctx.beginPath();vctx.arc(p,q,4,0,Math.PI*2);vctx.fillStyle='#fff';vctx.fill();vctx.strokeStyle='#000';vctx.stroke();});}
   if(tf)drawTransformBox();
   if(S.tool==='crop'&&cropBox&&!tf)drawCrop();
-  if((S.tool==='brush'||S.tool==='eraser')&&pointer.inside&&!spaceHeld&&!textEdit&&!tf){
-    const r=Math.max(.5,S[S.tool].size*z/2);
+  const csz=S.tool==='brush'||S.tool==='eraser'?S[S.tool].size:S.tool==='wand'&&S.wand.mode==='quick'?S.wand.size:0;
+  if(csz&&pointer.inside&&!spaceHeld&&!textEdit&&!tf){
+    const r=Math.max(.5,csz*z/2);
     vctx.beginPath();vctx.arc(pointer.sx,pointer.sy,r,0,Math.PI*2);vctx.lineWidth=2.5;vctx.strokeStyle='rgba(0,0,0,.6)';vctx.stroke();vctx.lineWidth=1;vctx.strokeStyle='rgba(255,255,255,.9)';vctx.stroke();
     if(r<5){vctx.beginPath();vctx.moveTo(pointer.sx-6,pointer.sy);vctx.lineTo(pointer.sx+6,pointer.sy);vctx.moveTo(pointer.sx,pointer.sy-6);vctx.lineTo(pointer.sx,pointer.sy+6);vctx.stroke();}
   }
@@ -569,7 +580,7 @@ function resizeView(){
   if(!resizeView.done&&r.width>0&&hasDoc()){resizeView.done=true;fitView();}
   requestRender();
 }
-setInterval(()=>{if((S.sel||polyDraft||(drag&&(drag.tool==='marquee'||drag.tool==='lasso')))&&!reduceMotion){antsOffset=(antsOffset+1)%8;requestRender();}},110);
+setInterval(()=>{if((S.sel||polyDraft||(drag&&(drag.tool==='marquee'||drag.tool==='lasso'||drag.tool==='wand')))&&!reduceMotion){antsOffset=(antsOffset+1)%8;requestRender();}},110);
 
 /* ================= view ================= */
 const ZSTEPS=[.02,.05,.0833,.125,.1667,.25,.3333,.5,.6667,1,1.5,2,3,4,6,8,12,16,24,32];
@@ -654,6 +665,72 @@ function selOutline(s){
   }
   s.outline=P;return P;
 }
+/* ---- magic wand & quick selection ---- */
+function selSource(all){
+  if(all){if(compDirty){composite();compDirty=false;}return comp.getContext('2d').getImageData(0,0,S.w,S.h).data;}
+  return activeLayer().canvas.getContext('2d').getImageData(0,0,S.w,S.h).data;
+}
+function maskFromBits(bits,aa){
+  const m=newMask(),g=m.getContext('2d'),img=g.createImageData(S.w,S.h),d=img.data;
+  for(let i=0;i<bits.length;i++)if(bits[i]){const j=i*4;d[j]=d[j+1]=d[j+2]=d[j+3]=255;}
+  if(aa)FX.blur(img,{radius:.7});g.putImageData(img,0,0);return m;
+}
+function wandClick(p,e){
+  const W=S.w,Hh=S.h,x0=Math.floor(p.x),y0=Math.floor(p.y);if(x0<0||y0<0||x0>=W||y0>=Hh)return;
+  const d=selSource(S.wand.all),i0=(y0*W+x0)*4,r0=d[i0],g0=d[i0+1],b0=d[i0+2],a0=d[i0+3],tol=S.wand.tol;
+  const match=i=>Math.abs(d[i]-r0)<=tol&&Math.abs(d[i+1]-g0)<=tol&&Math.abs(d[i+2]-b0)<=tol&&Math.abs(d[i+3]-a0)<=tol;
+  const bits=new Uint8Array(W*Hh);
+  if(S.wand.contig){
+    const stack=[[x0,y0]];
+    while(stack.length){
+      let[x,y]=stack.pop();let idx=y*W+x;
+      while(x>=0&&!bits[idx]&&match(idx*4)){x--;idx--;}
+      x++;idx++;let up=false,dn=false;
+      while(x<W&&!bits[idx]&&match(idx*4)){
+        bits[idx]=1;
+        if(y>0){const u=idx-W;if(!bits[u]&&match(u*4)){if(!up){stack.push([x,y-1]);up=true;}}else up=false;}
+        if(y<Hh-1){const v=idx+W;if(!bits[v]&&match(v*4)){if(!dn){stack.push([x,y+1]);dn=true;}}else dn=false;}
+        x++;idx++;
+      }
+    }
+  }else for(let i=0;i<bits.length;i++)if(match(i*4))bits[i]=1;
+  applySelMask(maskFromBits(bits,S.wand.aa),selModeFrom(e));
+}
+/* quick selection: each brush dab grows a region from the pixels under the brush, stopping at
+   colours far from the dab's average and at strong edges, inside a window around the dab */
+function quickDown(p,e){
+  let mode=selModeFrom(e);if(mode==='new'&&S.sel)mode='add';if(mode==='int')mode='add';
+  if(mode==='new'){if(S.sel)lastSel=S.sel;S.sel=null;}
+  const ov=makeCanvas(S.w,S.h),og=ov.getContext('2d');
+  const q={mode,d:selSource(S.wand.all),bits:new Uint8Array(S.w*S.h),ov,og,oimg:og.createImageData(S.w,S.h),last:p,tint:mode==='sub'?[255,90,90]:[76,155,255]};
+  quickSeed(q,p.x,p.y);return q;
+}
+function quickMove(p,q){
+  const step=Math.max(2,S.wand.size/4),dx=p.x-q.last.x,dy=p.y-q.last.y,dist=Math.hypot(dx,dy);if(dist<step)return;
+  const n=Math.ceil(dist/step);for(let k=1;k<=n;k++)quickSeed(q,q.last.x+dx*k/n,q.last.y+dy*k/n);q.last=p;
+}
+function quickSeed(q,cx,cy){
+  const W=S.w,Hh=S.h,d=q.d,bits=q.bits,od=q.oimg.data,r=Math.max(1,S.wand.size/2),win=Math.max(60,r*5);
+  const x0=Math.max(0,Math.floor(cx-r)),x1=Math.min(W-1,Math.ceil(cx+r)),y0=Math.max(0,Math.floor(cy-r)),y1=Math.min(Hh-1,Math.ceil(cy+r));
+  if(x0>x1||y0>y1)return;
+  let n=0,mr=0,mg=0,mb=0,ma=0;const disk=[];
+  for(let y=y0;y<=y1;y++)for(let x=x0;x<=x1;x++){if((x+.5-cx)**2+(y+.5-cy)**2>r*r)continue;const i=y*W+x,j=i*4;mr+=d[j];mg+=d[j+1];mb+=d[j+2];ma+=d[j+3];n++;disk.push(i);}
+  if(!n)return;mr/=n;mg/=n;mb/=n;ma/=n;
+  let v=0;for(const i of disk){const j=i*4;v+=(d[j]-mr)**2+(d[j+1]-mg)**2+(d[j+2]-mb)**2;}v/=n*3;
+  const T=clamp(Math.sqrt(v)*2+18,18,60),T2=T*T*3,E=Math.max(20,T*.6),E2=E*E*3,W2=win*win;
+  const wx0=Math.max(0,Math.floor(cx-win)),wx1=Math.min(W-1,Math.ceil(cx+win)),wy0=Math.max(0,Math.floor(cy-win)),wy1=Math.min(Hh-1,Math.ceil(cy+win));
+  const[tr,tg,tb]=q.tint,queue=[];let bx0=x0,bx1=x1,by0=y0,by1=y1;
+  const mark=i=>{bits[i]=1;const j=i*4;od[j]=tr;od[j+1]=tg;od[j+2]=tb;od[j+3]=255;queue.push(i);};
+  for(const i of disk)if(!bits[i])mark(i);
+  const tryN=(k,j)=>{if(bits[k])return;const l=k*4,kx=k%W,ky=(k-kx)/W,dd=((kx-cx)**2+(ky-cy)**2)/W2;if(dd>1)return;
+    if((d[l]-mr)**2+(d[l+1]-mg)**2+(d[l+2]-mb)**2+(d[l+3]-ma)**2>T2*(1-dd*.8))return;
+    if((d[l]-d[j])**2+(d[l+1]-d[j+1])**2+(d[l+2]-d[j+2])**2>E2)return;
+    mark(k);const x=k%W,y=(k-x)/W;if(x<bx0)bx0=x;if(x>bx1)bx1=x;if(y<by0)by0=y;if(y>by1)by1=y;};
+  while(queue.length){const i=queue.pop(),x=i%W,y=(i-x)/W,j=i*4;
+    if(x>wx0)tryN(i-1,j);if(x<wx1)tryN(i+1,j);if(y>wy0)tryN(i-W,j);if(y<wy1)tryN(i+W,j);}
+  q.og.putImageData(q.oimg,0,0,bx0,by0,bx1-bx0+1,by1-by0+1);requestRender();
+}
+function quickUp(q){applySelMask(maskFromBits(q.bits,true),q.mode);}
 function selModeFrom(e){return e.shiftKey&&e.altKey?'int':e.shiftKey?'add':e.altKey?'sub':S.selMode;}
 const snap45=(a,q)=>{const ang=Math.round(Math.atan2(q[1]-a[1],q[0]-a[0])/(Math.PI/4))*(Math.PI/4),len=Math.hypot(q[0]-a[0],q[1]-a[1]);return[a[0]+Math.cos(ang)*len,a[1]+Math.sin(ang)*len];};
 function polyClick(p,e){
@@ -913,6 +990,9 @@ const TOOLS={
   lasso:{label:'なげなわ',key:'l',cursor:'crosshair',hint:'',icon:'',
     icons:{free:'<path d="M7.5 16.5C4.5 15 3 13 3 10.5 3 6.5 7 4 12 4s9 2.5 9 6.5S17 17 12 17c-1.6 0-3-.2-4.5-.5z" stroke-dasharray="3 2.4"/><path d="M7.5 16.5c-.8 1.2-.6 2.6.6 3.5"/>',
       poly:'<path d="M4 18 6.5 6 14 4l6 7-4.5 8z" stroke-dasharray="3 2.4"/>'}},
+  wand:{label:'自動選択',key:'w',cursor:'crosshair',hint:'',icon:'',
+    icons:{wand:'<path d="M4 20 13.5 10.5"/><path d="M12.5 9.5l2 2"/><path d="M16 3v2.5M16 13.5V16M20.5 9.5H23M9 9.5h2.5M19.2 6.3l-1.6 1.6M12.8 6.3l1.6 1.6M19.2 12.7l-1.6-1.6"/>',
+      quick:'<circle cx="9.5" cy="14.5" r="6" stroke-dasharray="2.6 2.2"/><path d="M13.5 10.5 19 5"/><path d="M18 3.5l2.5 2.5-2 2-2.5-2.5z"/>'}},
   crop:{label:'切り抜き',key:'c',cursor:'crosshair',hint:'ハンドルで範囲を調整、内側をドラッグで移動、外側をドラッグで描き直し。Enter かダブルクリックで確定、Esc でリセット',
     icon:'<path d="M6 2v16h16"/><path d="M2 6h16v16"/>'},
   brush:{label:'ブラシ',key:'b',cursor:'none',hint:'[ ] でサイズ、Shift+[ ] で硬さ、数字キーで不透明度。Shift+クリックで直線、Alt+クリックで色を取得',
@@ -994,6 +1074,11 @@ const HANDLERS={
     move(p,e,d){const l=d.pts[d.pts.length-1];if(Math.hypot(p.x-l[0],p.y-l[1])*S.zoom>=2)d.pts.push([p.x,p.y]);requestRender();},
     up(p,e,d){if(d.pts.length>=3)applySelMask(polyMask(d.pts),d.mode);else{requestRender();updateStatus();}}
   },
+  wand:{
+    down(p,e){if(S.wand.mode==='wand'){wandClick(p,e);return false;}return quickDown(p,e);},
+    move(p,e,d){quickMove(p,d);},
+    up(p,e,d){quickUp(d);}
+  },
   crop:CROP,
   fill:{down(p){const L=activeLayer();if(!L.visible){toast('非表示のレイヤーには塗れません');return false;}if(floodFill(L,p.x,p.y)){rasterize(L);touch(L);pushHistory('塗りつぶし');}return false;}},
   gradient:{
@@ -1073,7 +1158,7 @@ view.addEventListener('pointermove',e=>{
   if(tf&&!spaceHeld)view.style.cursor=tfCursor(tfHit(p));
   else if(S.tool==='crop'&&cropBox&&!spaceHeld){const h=cropHit(p);view.style.cursor=h.type==='move'?'move':h.type==='new'?'crosshair':(h.hx*h.hy>0?'nwse-resize':h.hx*h.hy<0?'nesw-resize':h.hx?'ew-resize':'ns-resize');}
   else if(S.tool==='marquee'&&!spaceHeld)view.style.cursor=(!e.shiftKey&&!e.altKey&&S.selMode==='new'&&selHit(p))?'move':'crosshair';
-  if(S.tool==='brush'||S.tool==='eraser'||polyDraft)requestRender();
+  if(S.tool==='brush'||S.tool==='eraser'||S.tool==='wand'||polyDraft)requestRender();
 });
 function endPointer(e){
   ptrs.delete(e.pointerId);if(ptrs.size<2)pinch=null;
@@ -1283,7 +1368,7 @@ function mergeVisible(){
 }
 function flatten(){if(compDirty){composite();compDirty=false;}const L=newLayer('背景');L.canvas.getContext('2d').drawImage(comp,0,0);S.layers=[L];S.active=0;touch(L);pushHistory('画像を統合');}
 function nudge(dx,dy){
-  if(['marquee','lasso'].includes(S.tool)&&S.sel){S.sel=translateSel(S.sel,dx,dy);requestRender();updateStatus();return;}
+  if(['marquee','lasso','wand'].includes(S.tool)&&S.sel){S.sel=translateSel(S.sel,dx,dy);requestRender();updateStatus();return;}
   if(S.tool!=='move')return;
   const L=activeLayer();if(!L.visible)return;const g=L.canvas.getContext('2d');
   if(S.sel){rasterize(L);const r=region(),fl=makeCanvas(r.w,r.h),fg=fl.getContext('2d');fg.drawImage(L.canvas,-r.x,-r.y);fg.globalCompositeOperation='destination-in';fg.drawImage(S.sel.mask,-r.x,-r.y);
@@ -1678,6 +1763,7 @@ const CMD={
   'merge-down':mergeDown,'merge-visible':mergeVisible,'flatten':flatten,
   'select-all':selectAll,'deselect':deselect,'reselect':reselect,'sel-invert':invertSel,'feather':featherDialog,
   'tool-rect':()=>{setMarqShape('rect');selectTool('marquee');},'tool-ellipse':()=>{setMarqShape('ellipse');selectTool('marquee');},
+  'tool-wand':()=>{setWandMode('wand');selectTool('wand');},'tool-quick':()=>{setWandMode('quick');selectTool('wand');},
   'tool-free':()=>{setLassoMode('free');selectTool('lasso');},'tool-poly':()=>{setLassoMode('poly');selectTool('lasso');},
   'rasterize':()=>{const L=activeLayer();if(!L.text){toast('選択中のレイヤーはテキストレイヤーではありません');return;}L.text=null;pushHistory('テキストをラスタライズ');},
   'text-edit':()=>{const L=activeLayer();if(L.text){selectTool('text');editTextLayer(L);}},
@@ -1690,7 +1776,7 @@ const MENUS=[
   ['編集',[['undo','取り消し','Ctrl+Z'],['redo','やり直し','Shift+Ctrl+Z'],'-',['cut','カット','Ctrl+X'],['copy','コピー','Ctrl+C'],['copy-merged','結合部分をコピー','Shift+Ctrl+C'],['paste','ペースト','Ctrl+V'],'-',['fill-fg','描画色で塗りつぶし','Alt+Delete'],['fill-bg','背景色で塗りつぶし','Ctrl+Delete'],['clear','消去','Delete'],'-',['transform','自由変形','Ctrl+T / Alt+T']]],
   ['イメージ',[['#','色調補正'],['f-bc','明るさ・コントラスト…'],['f-hs','色相・彩度…','Ctrl+U'],['f-gray','彩度を下げる','Shift+Ctrl+U'],['f-invert','階調の反転','Ctrl+I'],['f-posterize','ポスタリゼーション…'],['f-sepia','セピア'],'-',['image-size','画像解像度…','Alt+Ctrl+I'],['canvas-size','カンバスサイズ…','Alt+Ctrl+C'],'-',['#','画像の回転'],['rotate-180','180°'],['rotate-cw','90°（時計回り）'],['rotate-ccw','90°（反時計回り）'],['flip-h','カンバスを左右に反転'],['flip-v','カンバスを上下に反転'],'-',['crop-sel','切り抜き（選択範囲）']]],
   ['レイヤー',[['layer-new','新規レイヤー'],['layer-dup','レイヤーを複製'],['layer-copy','選択範囲をコピーしたレイヤー','Ctrl+J'],['layer-cut','選択範囲をカットしたレイヤー','Shift+Ctrl+J'],['layer-del','レイヤーを削除'],['rasterize','テキストをラスタライズ'],'-',['#','重ね順'],['layer-top','最前面へ','Shift+Ctrl+]'],['layer-up','前面へ','Ctrl+]'],['layer-down','背面へ','Ctrl+['],['layer-bottom','最背面へ','Shift+Ctrl+['],'-',['merge-down','下のレイヤーと結合','Ctrl+E'],['merge-visible','表示レイヤーを結合','Shift+Ctrl+E'],['flatten','画像を統合']]],
-  ['選択範囲',[['select-all','すべてを選択','Ctrl+A'],['deselect','選択を解除','Ctrl+D'],['reselect','再選択','Shift+Ctrl+D'],['sel-invert','選択範囲を反転','Shift+Ctrl+I'],'-',['feather','境界をぼかす…','Shift+F6'],'-',['tool-rect','長方形選択','M'],['tool-ellipse','楕円形選択','Shift+M'],['tool-free','なげなわ','L'],['tool-poly','多角形選択','Shift+L']]],
+  ['選択範囲',[['select-all','すべてを選択','Ctrl+A'],['deselect','選択を解除','Ctrl+D'],['reselect','再選択','Shift+Ctrl+D'],['sel-invert','選択範囲を反転','Shift+Ctrl+I'],'-',['feather','境界をぼかす…','Shift+F6'],'-',['tool-rect','長方形選択','M'],['tool-ellipse','楕円形選択','Shift+M'],['tool-free','なげなわ','L'],['tool-poly','多角形選択','Shift+L'],['tool-wand','自動選択ツール','W'],['tool-quick','クイック選択ツール','Shift+W']]],
   ['フィルター',[['f-blur','ぼかし（ガウス）…'],['f-sharpen','シャープ…']]],
   ['表示',[['zoom-in','ズームイン','Ctrl++'],['zoom-out','ズームアウト','Ctrl+-'],['fit','画面サイズに合わせる','Ctrl+0'],['actual','100%','Ctrl+1'],'-',['fullscreen','全画面表示（Ctrl+T などが使えます）','F']]],
   ['ウィンドウ',[]],
@@ -1741,7 +1827,7 @@ const lastInGroup={g:'gradient'};
 function buildTools(){
   const rail=$('#tools');
   Object.entries(TOOLS).forEach(([id,t],i)=>{
-    if(i===4||i===11)rail.append(el('div','rail-sep'));
+    if(i===5||i===12)rail.append(el('div','rail-sep'));
     const b=el('button','tool',`<svg class="i" viewBox="0 0 24 24">${t.icon}</svg><span class="k">${t.key}</span>`);
     b.dataset.tool=id;b.setAttribute('aria-pressed','false');
     b.addEventListener('click',()=>selectTool(id));
@@ -1761,13 +1847,17 @@ function buildTools(){
 function refreshToolMeta(){
   const m=TOOLS.marquee,l=TOOLS.lasso;
   m.icon=m.icons[S.marq.shape];m.label=S.marq.shape==='ellipse'?'楕円形選択':'長方形選択';m.hint=(S.marq.shape==='ellipse'?'ドラッグで楕円を選択。':'ドラッグで長方形を選択。')+SEL_HINT;
+  const wd=TOOLS.wand,q=S.wand.mode==='quick';wd.icon=wd.icons[S.wand.mode];wd.label=q?'クイック選択':'自動選択';wd.cursor=q?'none':'crosshair';
+  wd.hint=(q?'ドラッグでなぞった部分と似た色の範囲を選択。続けてなぞると追加、Alt でなぞると削除。[ ] でサイズ。':'クリックした場所と近い色の範囲を選択。')+'Shift+W で自動選択とクイック選択を切り替え。'+SEL_HINT;
   l.icon=l.icons[S.lasso.mode];l.label=S.lasso.mode==='poly'?'多角形選択':'なげなわ';
   l.hint=S.lasso.mode==='poly'?'クリックで頂点を追加し、始点クリック・ダブルクリック・Enter で閉じる。Backspace で 1 点戻す。'+SEL_HINT:'ドラッグで囲んで選択（離すと始点とつながります）。'+SEL_HINT;
-  Object.entries(TOOLS).forEach(([id,t])=>{const b=$(`.tool[data-tool="${id}"]`);if(!b)return;b.querySelector('svg').innerHTML=t.icon;const extra=id==='marquee'||id==='lasso'||id==='gradient'||id==='fill'?`（${t.key.toUpperCase()}、Shift+${t.key.toUpperCase()} で切り替え）`:`（${t.key.toUpperCase()}）`;b.title=t.label+extra;b.setAttribute('aria-label',t.label);});
+  Object.entries(TOOLS).forEach(([id,t])=>{const b=$(`.tool[data-tool="${id}"]`);if(!b)return;b.querySelector('svg').innerHTML=t.icon;const extra=id==='marquee'||id==='lasso'||id==='wand'||id==='gradient'||id==='fill'?`（${t.key.toUpperCase()}、Shift+${t.key.toUpperCase()} で切り替え）`:`（${t.key.toUpperCase()}）`;b.title=t.label+extra;b.setAttribute('aria-label',t.label);});
   $('#optMarq').value=S.marq.shape;$('#optLasso').value=S.lasso.mode;
-  if(!tf&&(S.tool==='marquee'||S.tool==='lasso')){$('#optToolName').textContent=TOOLS[S.tool].label;$('#stHint').textContent=TOOLS[S.tool].hint;}
+  $('#optWandMode').value=S.wand.mode;
+  if(!tf&&(S.tool==='marquee'||S.tool==='lasso'||S.tool==='wand')){$('#optToolName').textContent=TOOLS[S.tool].label;$('#stHint').textContent=TOOLS[S.tool].hint;}
 }
 function setMarqShape(v){S.marq.shape=v;refreshToolMeta();}
+function setWandMode(v){S.wand.mode=v;refreshToolMeta();syncOptions();updateCursor();requestRender();}
 function setLassoMode(v){S.lasso.mode=v;cancelPoly();refreshToolMeta();}
 function selectTool(id){
   if(drag)return;if(textEdit&&id!=='text')commitText();if(tf)commitTransform();
@@ -1792,6 +1882,8 @@ function syncOptions(){
   if(tl)TEXT_KEYS.forEach(k=>S.text[k]=tl[k]);
   syncTextUI();$('#optTextColor').value=(textEdit&&textEdit.color)||(tl&&tl.color)||S.fg;
   $('#charPanel').hidden=!(S.tool==='text'||textEdit||tl);}
+  $$('[data-wandmode]').forEach(o=>o.style.display=o.dataset.wandmode===S.wand.mode?'':'none');
+  setOut('optWTol',S.wand.tol,'');setOut('optQSize',S.wand.size,'px');$('#optWAA').checked=S.wand.aa;$('#optWContig').checked=S.wand.contig;$('#optWAll').checked=S.wand.all;
   $('#optPick').value=S.pick.all?'all':'layer';$('#optAuto').checked=S.move.auto;$('#optCropRatio').value=S.cropRatio;
   if(tf)syncTfInputs();
 }
@@ -1847,6 +1939,12 @@ $('#optTextColor').addEventListener('change',e=>{
 $('#optPick').addEventListener('change',e=>{S.pick.all=e.target.value==='all';});
 $('#optAuto').addEventListener('change',e=>{S.move.auto=e.target.checked;});
 $('#optMarq').addEventListener('change',e=>setMarqShape(e.target.value));
+$('#optWandMode').addEventListener('change',e=>setWandMode(e.target.value));
+$('#optWTol').addEventListener('input',e=>{S.wand.tol=+e.target.value;syncOptions();});
+$('#optQSize').addEventListener('input',e=>{S.wand.size=+e.target.value;syncOptions();requestRender();});
+$('#optWAA').addEventListener('change',e=>{S.wand.aa=e.target.checked;});
+$('#optWContig').addEventListener('change',e=>{S.wand.contig=e.target.checked;});
+$('#optWAll').addEventListener('change',e=>{S.wand.all=e.target.checked;});
 $('#optLasso').addEventListener('change',e=>setLassoMode(e.target.value));
 $('#optCropRatio').addEventListener('change',e=>{S.cropRatio=e.target.value;fitCropToRatio();});
 $$('[data-selmode]').forEach(b=>b.addEventListener('click',()=>{S.selMode=b.dataset.selmode;syncOptions();}));
@@ -1970,7 +2068,7 @@ document.addEventListener('keydown',e=>{
   if(e.key.startsWith('Arrow')&&!mod&&hasDoc()){
     const st=e.shiftKey?10:1,dx=e.key==='ArrowLeft'?-st:e.key==='ArrowRight'?st:0,dy=e.key==='ArrowUp'?-st:e.key==='ArrowDown'?st:0;
     if(tf){e.preventDefault();tf.cx+=dx;tf.cy+=dy;tfLive();return;}
-    if(S.tool==='move'||((S.tool==='marquee'||S.tool==='lasso')&&S.sel)){e.preventDefault();nudge(dx,dy);return;}
+    if(S.tool==='move'||((S.tool==='marquee'||S.tool==='lasso'||S.tool==='wand')&&S.sel)){e.preventDefault();nudge(dx,dy);return;}
   }
   if(e.key==='F6'&&e.shiftKey){e.preventDefault();runCmd('feather');return;}
   if(mod){
@@ -2011,6 +2109,7 @@ document.addEventListener('keydown',e=>{
   if(e.altKey&&(e.key==='Backspace'||e.key==='Delete')){e.preventDefault();runCmd('fill-fg');return;}
   if(e.key==='Backspace'||e.key==='Delete'){e.preventDefault();runCmd('clear');return;}
   if('[]{}'.includes(e.key)&&e.key.length===1){
+    if(S.tool==='wand'&&S.wand.mode==='quick'){const up=e.key===']'||e.key==='}',st=S.wand.size<20?2:S.wand.size<60?5:10;S.wand.size=clamp(S.wand.size+(up?st:-st),2,300);syncOptions();requestRender();return;}
     if(S.tool==='brush'||S.tool==='eraser'){const s=bset(),up=e.key===']'||e.key==='}';
       if(e.shiftKey||e.key==='{'||e.key==='}')s.hardness=clamp(s.hardness+(up?25:-25),0,100);
       else{const st=s.size<10?1:s.size<50?5:10;s.size=clamp(s.size+(up?st:-st),1,400);}
@@ -2027,6 +2126,7 @@ document.addEventListener('keydown',e=>{
   if(k==='x'){swapColors();return;}
   if(k==='d'){resetColors();return;}
   if(k==='m'){if(e.shiftKey&&S.tool==='marquee')setMarqShape(S.marq.shape==='rect'?'ellipse':'rect');selectTool('marquee');return;}
+  if(k==='w'){if(e.shiftKey&&S.tool==='wand')setWandMode(S.wand.mode==='wand'?'quick':'wand');selectTool('wand');return;}
   if(k==='l'){if(e.shiftKey&&S.tool==='lasso')setLassoMode(S.lasso.mode==='free'?'poly':'free');selectTool('lasso');return;}
   if(k==='g'){let id=lastInGroup.g;if(e.shiftKey&&(S.tool==='gradient'||S.tool==='fill'))id=S.tool==='gradient'?'fill':'gradient';selectTool(id);return;}
   const tool=Object.keys(TOOLS).find(id=>TOOLS[id].key===k);if(tool)selectTool(tool);
