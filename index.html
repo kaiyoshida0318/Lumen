@@ -214,8 +214,15 @@ input[type=color]::-webkit-color-swatch{border:0;border-radius:3px}
     <div class="grp"><label for="optPick">取得元</label><select id="optPick"><option value="all">表示中の全レイヤー</option><option value="layer">現在のレイヤー</option></select></div>
     <span class="note">Alt+クリックで背景色に設定</span>
   </div>
-  <div class="opt" data-for="marquee move">
+  <div class="opt" data-for="marquee">
+    <div class="grp"><label for="optMarq">形状</label><select id="optMarq"><option value="rect">長方形</option><option value="ellipse">楕円</option></select></div>
+  </div>
+  <div class="opt" data-for="lasso">
+    <div class="grp"><label for="optLasso">方式</label><select id="optLasso"><option value="free">フリーハンド</option><option value="poly">多角形</option></select></div>
+  </div>
+  <div class="opt" data-for="marquee lasso move">
     <button class="btn" data-cmd="select-all">すべてを選択</button>
+    <button class="btn" data-cmd="sel-invert">選択範囲を反転</button>
     <button class="btn" data-cmd="deselect">選択を解除</button>
     <button class="btn" data-cmd="crop">選択範囲で切り抜き</button>
   </div>
@@ -307,6 +314,8 @@ const S={
   shape:{type:'rect',fill:true,stroke:false,width:6},
   text:{size:72,family:'sans',bold:true},
   pick:{all:true},
+  marq:{shape:'rect'},
+  lasso:{mode:'free'},
   lastPt:null,
 };
 let uid=1,revCounter=1,layerNo=1,compDirty=true,needRender=false,liveFn=null,drag=null,spaceHeld=false,textEdit=null,antsOffset=0,downloads=null;
@@ -318,7 +327,68 @@ function touch(L){L.rev=++revCounter;compDirty=true;}
 const activeLayer=()=>S.layers[S.active];
 function region(){return S.sel?{...S.sel}:{x:0,y:0,w:S.w,h:S.h};}
 function clipRect(r){const x0=Math.max(0,Math.round(r.x)),y0=Math.max(0,Math.round(r.y)),x1=Math.min(S.w,Math.round(r.x+r.w)),y1=Math.min(S.h,Math.round(r.y+r.h));return(x1-x0<1||y1-y0<1)?null:{x:x0,y:y0,w:x1-x0,h:y1-y0};}
-function clipSel(g){if(S.sel){g.beginPath();g.rect(S.sel.x,S.sel.y,S.sel.w,S.sel.h);g.clip();}}
+/* selection = {shape:'rect'|'ellipse'|'poly', rx,ry,rw,rh | pts, inv, x,y,w,h (integer bbox clipped to canvas)} */
+function selRawBounds(s){
+  if(s.shape==='poly'){let x0=Infinity,y0=Infinity,x1=-Infinity,y1=-Infinity;for(const[x,y]of s.pts){if(x<x0)x0=x;if(y<y0)y0=y;if(x>x1)x1=x;if(y>y1)y1=y;}return{x:x0,y:y0,w:x1-x0,h:y1-y0};}
+  return{x:s.rx,y:s.ry,w:s.rw,h:s.rh};
+}
+function finalizeSel(s){
+  if(!s)return null;
+  if(s.inv){Object.assign(s,{x:0,y:0,w:S.w,h:S.h});return s;}
+  const b=selRawBounds(s);if(!(b.w>=1&&b.h>=1))return null;
+  const x0=Math.max(0,Math.floor(b.x)),y0=Math.max(0,Math.floor(b.y)),x1=Math.min(S.w,Math.ceil(b.x+b.w)),y1=Math.min(S.h,Math.ceil(b.y+b.h));
+  if(x1-x0<1||y1-y0<1)return null;Object.assign(s,{x:x0,y:y0,w:x1-x0,h:y1-y0});return s;
+}
+function makeRectSel(x,y,w,h){const x0=Math.round(x),y0=Math.round(y);return finalizeSel({shape:'rect',rx:x0,ry:y0,rw:Math.round(x+w)-x0,rh:Math.round(y+h)-y0});}
+function translateSel(s,dx,dy){
+  const n={...s};if(s.shape==='poly')n.pts=s.pts.map(([x,y])=>[x+dx,y+dy]);else{n.rx+=dx;n.ry+=dy;}return finalizeSel(n);
+}
+/* path in screen space: screen = (doc + o) * z + t */
+function selPath(s,ox=0,oy=0,z=1,tx=0,ty=0){
+  const P=new Path2D(),X=x=>(x+ox)*z+tx,Y=y=>(y+oy)*z+ty;
+  if(s.inv)P.rect(tx,ty,S.w*z,S.h*z);
+  if(s.shape==='rect')P.rect(X(s.rx),Y(s.ry),s.rw*z,s.rh*z);
+  else if(s.shape==='ellipse')P.ellipse(X(s.rx+s.rw/2),Y(s.ry+s.rh/2),Math.abs(s.rw*z/2),Math.abs(s.rh*z/2),0,0,Math.PI*2);
+  else{s.pts.forEach(([x,y],i)=>i?P.lineTo(X(x),Y(y)):P.moveTo(X(x),Y(y)));P.closePath();}
+  return P;
+}
+const selRule=s=>s.inv?'evenodd':'nonzero';
+const isPlainRect=s=>s.shape==='rect'&&!s.inv;
+function clipSel(g){if(S.sel)g.clip(selPath(S.sel),selRule(S.sel));}
+/* per-pixel selection coverage (0-255) for bbox r, or null when the whole bbox is selected */
+function selMask(r){
+  const s=S.sel;if(!s||isPlainRect(s))return null;
+  const c=makeCanvas(r.w,r.h),g=c.getContext('2d');g.translate(-r.x,-r.y);g.fillStyle='#fff';g.fill(selPath(s),selRule(s));
+  const d=g.getImageData(0,0,r.w,r.h).data,a=new Uint8Array(r.w*r.h);for(let i=0;i<a.length;i++)a[i]=d[i*4+3];return a;
+}
+function maskBlend(out,orig,a){
+  if(!a)return;const o=out.data,b=orig.data;
+  for(let i=0;i<a.length;i++){const m=a[i];if(m===255)continue;const j=i*4;
+    if(m===0){o[j]=b[j];o[j+1]=b[j+1];o[j+2]=b[j+2];o[j+3]=b[j+3];}
+    else{const t=m/255;for(let k=0;k<4;k++)o[j+k]=b[j+k]+(o[j+k]-b[j+k])*t;}}
+}
+let polyDraft=null;
+function snap45(a,q){const ang=Math.round(Math.atan2(q[1]-a[1],q[0]-a[0])/(Math.PI/4))*(Math.PI/4),len=Math.hypot(q[0]-a[0],q[1]-a[1]);return[a[0]+Math.cos(ang)*len,a[1]+Math.sin(ang)*len];}
+function polyClick(p,e){
+  if(!polyDraft){polyDraft={pts:[[p.x,p.y]]};S.sel=null;requestRender();updateStatus();return;}
+  const pts=polyDraft.pts,f=pts[0],l=pts[pts.length-1];
+  if(pts.length>=3&&Math.hypot(p.x-f[0],p.y-f[1])*S.zoom<9){closePoly();return;}
+  let q=[p.x,p.y];if(e.shiftKey)q=snap45(l,q);
+  if(Math.hypot(q[0]-l[0],q[1]-l[1])*S.zoom<3)return;
+  pts.push(q);requestRender();
+}
+function closePoly(){
+  if(!polyDraft)return;const pts=polyDraft.pts;polyDraft=null;
+  const s=pts.length>=3?finalizeSel({shape:'poly',pts}):null;S.sel=s&&s.w>=2&&s.h>=2?s:null;requestRender();updateStatus();
+}
+function cancelPoly(){if(polyDraft){polyDraft=null;requestRender();}}
+function strokeDraft(pts,closeTo){
+  const z=S.zoom,X=x=>S.panX+x*z,Y=y=>S.panY+y*z;
+  vctx.beginPath();pts.forEach(([x,y],i)=>i?vctx.lineTo(X(x),Y(y)):vctx.moveTo(X(x),Y(y)));
+  if(closeTo)vctx.lineTo(closeTo[0],closeTo[1]);
+  vctx.lineWidth=1;vctx.setLineDash([]);vctx.strokeStyle='#000';vctx.stroke();
+  vctx.setLineDash([4,4]);vctx.lineDashOffset=-antsOffset;vctx.strokeStyle='#fff';vctx.stroke();vctx.setLineDash([]);
+}
 
 /* ---------- history ---------- */
 const H={stack:[],index:-1,max:30};
@@ -336,7 +406,7 @@ function pushHistory(name){
 function resetHistory(name){H.stack=[];H.index=-1;snapCache.clear();pushHistory(name);}
 function restore(i){
   if(i<0||i>=H.stack.length||drag)return;
-  if(textEdit)cancelText();
+  if(textEdit)cancelText();polyDraft=null;
   const s=H.stack[i].snap;S.w=s.w;S.h=s.h;S.name=s.name;S.active=s.active;S.sel=s.sel?{...s.sel}:null;S.override=null;
   S.layers=s.layers.map(l=>{snapCache.set(l.id,{rev:l.rev,canvas:l.canvas});return{id:l.id,name:l.name,visible:l.visible,opacity:l.opacity,blend:l.blend,rev:l.rev,canvas:cloneCanvas(l.canvas)};});
   H.index=i;compDirty=true;refreshAll();
@@ -372,9 +442,17 @@ function render(){
   vctx.strokeStyle='rgba(255,255,255,.08)';vctx.lineWidth=1;vctx.strokeRect(Math.round(x)-.5,Math.round(y)-.5,Math.round(dw)+1,Math.round(dh)+1);
   if(S.sel){
     let ox=0,oy=0;if(drag&&drag.tool==='move'&&drag.hasSel){ox=drag.dx;oy=drag.dy;}
-    const sx=Math.round(x+(S.sel.x+ox)*z)+.5,sy=Math.round(y+(S.sel.y+oy)*z)+.5,sw=Math.round(S.sel.w*z),sh=Math.round(S.sel.h*z);
-    vctx.setLineDash([]);vctx.strokeStyle='#000';vctx.strokeRect(sx,sy,sw,sh);
-    vctx.setLineDash([4,4]);vctx.lineDashOffset=-antsOffset;vctx.strokeStyle='#fff';vctx.strokeRect(sx,sy,sw,sh);vctx.setLineDash([]);
+    const P=selPath(S.sel,ox,oy,z,x+.5,y+.5);vctx.lineWidth=1;
+    vctx.setLineDash([]);vctx.strokeStyle='#000';vctx.stroke(P);
+    vctx.setLineDash([4,4]);vctx.lineDashOffset=-antsOffset;vctx.strokeStyle='#fff';vctx.stroke(P);vctx.setLineDash([]);
+  }
+  if(drag&&drag.tool==='lasso'&&drag.pts.length>1){const f=drag.pts[0];strokeDraft(drag.pts,[x+f[0]*z,y+f[1]*z]);}
+  if(polyDraft){
+    const pts=polyDraft.pts,l=pts[pts.length-1];let end=null;
+    if(pointer.inside){let q=[(pointer.sx-x)/z,(pointer.sy-y)/z];if(pointer.shift)q=snap45(l,q);end=[x+q[0]*z,y+q[1]*z];}
+    strokeDraft(pts,end);
+    const f=pts[0],hot=pointer.inside&&pts.length>=3&&Math.hypot(pointer.sx-(x+f[0]*z),pointer.sy-(y+f[1]*z))<9;
+    vctx.fillStyle=hot?'#4c9bff':'#fff';vctx.strokeStyle='#000';vctx.fillRect(x+f[0]*z-4,y+f[1]*z-4,8,8);vctx.strokeRect(x+f[0]*z-4.5,y+f[1]*z-4.5,9,9);
   }
   if((S.tool==='brush'||S.tool==='eraser')&&pointer.inside&&!spaceHeld&&!textEdit){
     const r=Math.max(.5,S[S.tool].size*z/2);
@@ -390,7 +468,7 @@ function resizeView(){
   if(!resizeView.done&&r.width>0){resizeView.done=true;fitView();}
   requestRender();
 }
-setInterval(()=>{if(S.sel&&!reduceMotion){antsOffset=(antsOffset+1)%8;requestRender();}},110);
+setInterval(()=>{if((S.sel||polyDraft)&&!reduceMotion){antsOffset=(antsOffset+1)%8;requestRender();}},110);
 
 /* ---------- view ---------- */
 const ZSTEPS=[.02,.05,.0833,.125,.1667,.25,.3333,.5,.6667,1,1.5,2,3,4,6,8,12,16,24,32];
@@ -453,7 +531,10 @@ function floodFill(L,px,py){
   if(x0<b.x||y0<b.y||x0>=b.x+b.w||y0>=b.y+b.h)return false;
   const g=L.canvas.getContext('2d'),img=g.getImageData(0,0,W,Hh),d=img.data;
   const i0=(y0*W+x0)*4,tr=d[i0],tg=d[i0+1],tb=d[i0+2],ta=d[i0+3],tol=S.fill.tol;
-  const match=i=>Math.abs(d[i]-tr)<=tol&&Math.abs(d[i+1]-tg)<=tol&&Math.abs(d[i+2]-tb)<=tol&&Math.abs(d[i+3]-ta)<=tol;
+  const sm=selMask(b);
+  if(sm&&sm[(y0-b.y)*b.w+(x0-b.x)]<128)return false;
+  const inSel=sm?(i=>{const p=i>>2,x=p%W,y=(p-x)/W;return sm[(y-b.y)*b.w+(x-b.x)]>=128;}):(()=>true);
+  const match=i=>Math.abs(d[i]-tr)<=tol&&Math.abs(d[i+1]-tg)<=tol&&Math.abs(d[i+2]-tb)<=tol&&Math.abs(d[i+3]-ta)<=tol&&inSel(i);
   const mask=new Uint8Array(W*Hh),bx0=b.x,bx1=b.x+b.w,by0=b.y,by1=b.y+b.h;
   if(S.fill.contig){
     const stack=[[x0,y0]];
@@ -505,8 +586,15 @@ function drawShape(g,s){
 const TOOLS={
   move:{label:'移動',key:'v',cursor:'move',hint:'ドラッグでレイヤーを移動します。選択範囲がある場合はその中身だけを動かします。Shift で水平・垂直に固定',
     icon:'<path d="M12 3v18M3 12h18M12 3 9.5 5.5M12 3l2.5 2.5M12 21l-2.5-2.5M12 21l2.5-2.5M3 12l2.5-2.5M3 12l2.5 2.5M21 12l-2.5-2.5M21 12l-2.5 2.5"/>'},
-  marquee:{label:'長方形選択',key:'m',cursor:'crosshair',hint:'ドラッグで範囲を選択。Shift で正方形。クリックで選択を解除',
-    icon:'<rect x="4" y="5" width="16" height="14" rx="1" stroke-dasharray="3 2.6"/>'},
+  marquee:{label:'選択（長方形・楕円）',key:'m',cursor:'crosshair',hint:'ドラッグで範囲を選択。Shift で正方形・正円、Alt で中心から。Shift+M で長方形と楕円を切り替え',
+    icon:'<rect x="4" y="5" width="16" height="14" rx="1" stroke-dasharray="3 2.6"/>',
+    icons:{rect:'<rect x="4" y="5" width="16" height="14" rx="1" stroke-dasharray="3 2.6"/>',ellipse:'<ellipse cx="12" cy="12" rx="8.5" ry="7" stroke-dasharray="3 2.6"/>'}},
+  lasso:{label:'なげなわ',key:'l',cursor:'crosshair',hint:'',
+    icon:'',
+    icons:{free:'<path d="M7.5 16.5C4.5 15 3 13 3 10.5 3 6.5 7 4 12 4s9 2.5 9 6.5S17 17 12 17c-1.6 0-3-.2-4.5-.5z" stroke-dasharray="3 2.4"/><path d="M7.5 16.5c-.8 1.2-.6 2.6.6 3.5"/>',
+      poly:'<path d="M4 18 6.5 6 14 4l6 7-4.5 8z" stroke-dasharray="3 2.4"/>'},
+    hints:{free:'ドラッグで自由な形を囲んで選択。指を離すと始点と自動でつながります。Shift+L で多角形に切り替え',
+      poly:'クリックで頂点を追加。始点をクリック、ダブルクリック、Enter のいずれかで閉じます。Shift で 45° 単位、Backspace で 1 点戻す、Esc で取り消し'}},
   brush:{label:'ブラシ',key:'b',cursor:'none',hint:'[ と ] でサイズ変更。Shift+クリックで直線、Alt+クリックで色を取得',
     icon:'<path d="M19.5 3.5a1.5 1.5 0 0 1 2 2L13 14l-2.5-2.5z"/><path d="M10.5 11.5C8 11.5 6.5 13 6.5 15.5c0 1.6-1 2.6-3 3 1.4 1 3 1.5 4.5 1.5 3 0 5-2 5-5"/>'},
   eraser:{label:'消しゴム',key:'e',cursor:'none',hint:'[ と ] でサイズ変更。選択範囲がある場合はその中だけを消します',
@@ -531,7 +619,11 @@ const HANDLERS={
     down(p){
       const L=activeLayer();if(!L.visible){toast('非表示のレイヤーは移動できません');return false;}
       const sel=S.sel;let fl,base=null;
-      if(sel){fl=makeCanvas(sel.w,sel.h);fl.getContext('2d').drawImage(L.canvas,-sel.x,-sel.y);base=cloneCanvas(L.canvas);base.getContext('2d').clearRect(sel.x,sel.y,sel.w,sel.h);}
+      if(sel){
+        const P=selPath(sel),rule=selRule(sel);
+        fl=makeCanvas(sel.w,sel.h);const fg=fl.getContext('2d');fg.translate(-sel.x,-sel.y);fg.clip(P,rule);fg.drawImage(L.canvas,0,0);
+        base=cloneCanvas(L.canvas);const bg=base.getContext('2d');bg.save();bg.clip(P,rule);bg.clearRect(sel.x,sel.y,sel.w,sel.h);bg.restore();
+      }
       else fl=cloneCanvas(L.canvas);
       return{start:p,dx:0,dy:0,fl,base,ox:sel?sel.x:0,oy:sel?sel.y:0,hasSel:!!sel};
     },
@@ -543,7 +635,7 @@ const HANDLERS={
     },
     up(p,e,d){
       if(!d.dx&&!d.dy){cancelOverride();return;}
-      if(d.hasSel)S.sel=clipRect({x:S.sel.x+d.dx,y:S.sel.y+d.dy,w:S.sel.w,h:S.sel.h});
+      if(d.hasSel)S.sel=translateSel(S.sel,d.dx,d.dy);
       commitOverride('移動');
     }
   },
@@ -552,10 +644,20 @@ const HANDLERS={
     move(p,e,d){
       let w=p.x-d.start.x,h=p.y-d.start.y;
       if(e.shiftKey){const s=Math.max(Math.abs(w),Math.abs(h));w=Math.sign(w||1)*s;h=Math.sign(h||1)*s;}
-      S.sel=clipRect({x:Math.min(d.start.x,d.start.x+w),y:Math.min(d.start.y,d.start.y+h),w:Math.abs(w),h:Math.abs(h)});
+      let x0=Math.min(d.start.x,d.start.x+w),y0=Math.min(d.start.y,d.start.y+h),aw=Math.abs(w),ah=Math.abs(h);
+      if(e.altKey){x0=d.start.x-aw;y0=d.start.y-ah;aw*=2;ah*=2;}
+      S.sel=S.marq.shape==='ellipse'?finalizeSel({shape:'ellipse',rx:x0,ry:y0,rw:aw,rh:ah}):makeRectSel(x0,y0,aw,ah);
       requestRender();updateStatus();
     },
     up(){if(S.sel&&(S.sel.w<2||S.sel.h<2))S.sel=null;requestRender();updateStatus();}
+  },
+  lasso:{
+    down(p,e){
+      if(S.lasso.mode==='poly'){polyClick(p,e);return false;}
+      S.sel=null;requestRender();updateStatus();return{pts:[[p.x,p.y]]};
+    },
+    move(p,e,d){const l=d.pts[d.pts.length-1];if(Math.hypot(p.x-l[0],p.y-l[1])*S.zoom>=2)d.pts.push([p.x,p.y]);requestRender();},
+    up(p,e,d){const s=d.pts.length>=3?finalizeSel({shape:'poly',pts:d.pts}):null;S.sel=s&&s.w>=2&&s.h>=2?s:null;requestRender();updateStatus();}
   },
   fill:{down(p){const L=activeLayer();if(!L.visible){toast('非表示のレイヤーには塗れません');return false;}if(floodFill(L,p.x,p.y)){touch(L);pushHistory('塗りつぶし');}return false;}},
   pick:{down(p,e){pickColor(p,e.altKey);return false;}},
@@ -619,9 +721,9 @@ view.addEventListener('pointermove',e=>{
     const z=clamp(pinch.zoom*nd/pinch.d,.02,32),dx=(pinch.mx-pinch.panX)/pinch.zoom,dy=(pinch.my-pinch.panY)/pinch.zoom;
     S.zoom=z;S.panX=mx-dx*z;S.panY=my-dy*z;requestRender();updateStatus();return;
   }
-  const p=toDoc(e);pointer.sx=p.sx;pointer.sy=p.sy;pointer.inside=true;updatePos(p);
+  const p=toDoc(e);pointer.sx=p.sx;pointer.sy=p.sy;pointer.inside=true;pointer.shift=e.shiftKey;updatePos(p);
   if(drag&&e.pointerId===drag.id){const T=HANDLERS[drag.tool];if(T.move)T.move(p,e,drag);}
-  else if(S.tool==='brush'||S.tool==='eraser')requestRender();
+  else if(S.tool==='brush'||S.tool==='eraser'||polyDraft)requestRender();
 });
 function endPointer(e){
   ptrs.delete(e.pointerId);if(ptrs.size<2)pinch=null;
@@ -710,9 +812,13 @@ function resizeImage(nw,nh){
 }
 function clearSel(){
   if(!S.sel){toast('消去する範囲を長方形選択ツール（M）で選んでください');return;}
-  const L=activeLayer();L.canvas.getContext('2d').clearRect(S.sel.x,S.sel.y,S.sel.w,S.sel.h);touch(L);pushHistory('消去');
+  const L=activeLayer(),g=L.canvas.getContext('2d');g.save();clipSel(g);g.clearRect(S.sel.x,S.sel.y,S.sel.w,S.sel.h);g.restore();touch(L);pushHistory('消去');
 }
-function fillSel(){const L=activeLayer(),g=L.canvas.getContext('2d'),r=region();g.save();g.fillStyle=S.fg;g.fillRect(r.x,r.y,r.w,r.h);g.restore();touch(L);pushHistory('描画色で塗りつぶし');}
+function fillSel(){const L=activeLayer(),g=L.canvas.getContext('2d'),r=region();g.save();clipSel(g);g.fillStyle=S.fg;g.fillRect(r.x,r.y,r.w,r.h);g.restore();touch(L);pushHistory('描画色で塗りつぶし');}
+function invertSel(){
+  if(!S.sel){toast('反転する選択範囲がありません');return;}
+  const s=finalizeSel({...S.sel,inv:!S.sel.inv});S.sel=s;requestRender();updateStatus();
+}
 
 /* ---------- filters ---------- */
 function mul3(A,B){const C=new Array(9);for(let i=0;i<3;i++)for(let j=0;j<3;j++)C[i*3+j]=A[i*3]*B[j]+A[i*3+1]*B[3+j]+A[i*3+2]*B[6+j];return C;}
@@ -756,9 +862,13 @@ const FX={
     for(let y=1;y<h-1;y++)for(let x=1;x<w-1;x++){const i=(y*w+x)*4;for(let c=0;c<3;c++){const k=i+c;d[k]=src[k]*(1+4*a)-a*(src[k-4]+src[k+4]+src[k-row]+src[k+row]);}}
   },
 };
-function applyNow(name,fn){const L=activeLayer(),r=region(),g=L.canvas.getContext('2d'),img=g.getImageData(r.x,r.y,r.w,r.h);fn(img);g.putImageData(img,r.x,r.y);touch(L);pushHistory(name);}
+function applyNow(name,fn){
+  const L=activeLayer(),r=region(),g=L.canvas.getContext('2d'),img=g.getImageData(r.x,r.y,r.w,r.h),sm=selMask(r);
+  const orig=sm?new ImageData(new Uint8ClampedArray(img.data),r.w,r.h):null;
+  fn(img);maskBlend(img,orig,sm);g.putImageData(img,r.x,r.y);touch(L);pushHistory(name);
+}
 function filterDialog(title,params,fn){
-  const L=activeLayer(),r=region(),g=L.canvas.getContext('2d'),backup=g.getImageData(r.x,r.y,r.w,r.h);
+  const L=activeLayer(),r=region(),g=L.canvas.getContext('2d'),backup=g.getImageData(r.x,r.y,r.w,r.h),sm=selMask(r);
   const vals={},wrap=el('div');wrap.style.cssText='display:flex;flex-direction:column;gap:12px';
   params.forEach(p=>{
     vals[p.k]=p.v;const f=el('div','field');const id='fx_'+p.k;
@@ -770,7 +880,7 @@ function filterDialog(title,params,fn){
   });
   wrap.append(el('div','muted',S.sel?'選択範囲内に適用します':'「'+L.name+'」全体に適用します'));
   let pending=false,closed=false;
-  const compute=()=>{const out=new ImageData(new Uint8ClampedArray(backup.data),r.w,r.h);fn(out,vals);return out;};
+  const compute=()=>{const out=new ImageData(new Uint8ClampedArray(backup.data),r.w,r.h);fn(out,vals);maskBlend(out,backup,sm);return out;};
   function preview(){if(pending)return;pending=true;requestAnimationFrame(()=>{pending=false;if(closed)return;g.putImageData(compute(),r.x,r.y);compDirty=true;requestRender();});}
   modal({title,content:wrap,ok:'適用',floating:true,
     onOk(){closed=true;g.putImageData(compute(),r.x,r.y);touch(L);pushHistory(title);},
@@ -780,7 +890,7 @@ function filterDialog(title,params,fn){
 
 /* ---------- documents & files ---------- */
 function createDoc(w,h,bg,name,histName){
-  if(textEdit)cancelText();
+  if(textEdit)cancelText();polyDraft=null;
   S.w=w;S.h=h;S.name=name;S.sel=null;S.override=null;S.lastPt=null;layerNo=1;
   const L=newLayer('背景');if(bg&&bg!=='transparent'){const g=L.canvas.getContext('2d');g.fillStyle=bg;g.fillRect(0,0,w,h);}
   S.layers=[L];S.active=0;touch(L);fitView();resetHistory(histName||'新規');return L;
@@ -798,7 +908,7 @@ async function openFile(file){
   try{const{img,url,name}=await loadImageFile(file);
     let w=img.naturalWidth,h=img.naturalHeight;const sc=Math.min(1,6000/Math.max(w,h));w=Math.round(w*sc);h=Math.round(h*sc);
     S.w=w;S.h=h;const L=newLayer('背景');L.canvas.getContext('2d').drawImage(img,0,0,w,h);URL.revokeObjectURL(url);
-    S.name=name;S.sel=null;S.override=null;S.lastPt=null;layerNo=1;S.layers=[L];S.active=0;touch(L);fitView();resetHistory('開く');
+    S.name=name;S.sel=null;polyDraft=null;S.override=null;S.lastPt=null;layerNo=1;S.layers=[L];S.active=0;touch(L);fitView();resetHistory('開く');
     if(sc<1)toast('大きな画像のため 6000px 以内に縮小して開きました');
   }catch(err){toast(err.message);}
 }
@@ -886,8 +996,11 @@ const CMD={
   'new':newDocDialog,'open':()=>$('#fileOpen').click(),'place':()=>$('#filePlace').click(),
   'export-png':()=>exportImage('png'),'export-jpeg':()=>exportImage('jpeg'),'export-webp':()=>exportImage('webp'),
   'undo':undo,'redo':redo,
-  'select-all':()=>{S.sel={x:0,y:0,w:S.w,h:S.h};requestRender();updateStatus();},
-  'deselect':()=>{S.sel=null;requestRender();updateStatus();},
+  'select-all':()=>{cancelPoly();S.sel=makeRectSel(0,0,S.w,S.h);requestRender();updateStatus();},
+  'deselect':()=>{cancelPoly();S.sel=null;requestRender();updateStatus();},
+  'sel-invert':invertSel,
+  'tool-rect':()=>{setMarqShape('rect');selectTool('marquee');},'tool-ellipse':()=>{setMarqShape('ellipse');selectTool('marquee');},
+  'tool-free':()=>{setLassoMode('free');selectTool('lasso');},'tool-poly':()=>{setLassoMode('poly');selectTool('lasso');},
   'clear':clearSel,'fill-fg':fillSel,
   'image-size':imageSizeDialog,'crop':cropToSel,'rotate-cw':()=>rotate(1),'rotate-ccw':()=>rotate(-1),'flip-h':()=>flip(true),'flip-v':()=>flip(false),
   'layer-new':()=>{addLayer();pushHistory('新規レイヤー');},'layer-dup':duplicateLayer,'layer-del':deleteLayer,
@@ -902,7 +1015,8 @@ const CMD={
 };
 const MENUS=[
   ['ファイル',[['new','新規作成…'],['open','画像を開く…','Ctrl+O'],['place','レイヤーとして配置…'],'-',['export-png','PNG で書き出し','Ctrl+S'],['export-jpeg','JPEG で書き出し'],['export-webp','WebP で書き出し']]],
-  ['編集',[['undo','取り消し','Ctrl+Z'],['redo','やり直し','Ctrl+Shift+Z'],'-',['select-all','すべてを選択','Ctrl+A'],['deselect','選択を解除','Ctrl+D'],'-',['clear','選択範囲を消去','Delete'],['fill-fg','描画色で塗りつぶし','Alt+Delete']]],
+  ['編集',[['undo','取り消し','Ctrl+Z'],['redo','やり直し','Ctrl+Shift+Z'],'-',['clear','選択範囲を消去','Delete'],['fill-fg','描画色で塗りつぶし','Alt+Delete']]],
+  ['選択範囲',[['select-all','すべてを選択','Ctrl+A'],['deselect','選択を解除','Ctrl+D'],['sel-invert','選択範囲を反転','Ctrl+Shift+I'],'-',['tool-rect','長方形選択','M'],['tool-ellipse','楕円選択','Shift+M'],['tool-free','なげなわ','L'],['tool-poly','多角形選択','Shift+L']]],
   ['イメージ',[['image-size','画像サイズ…'],['crop','選択範囲で切り抜き'],'-',['rotate-cw','90° 回転（時計回り）'],['rotate-ccw','90° 回転（反時計回り）'],['flip-h','左右に反転'],['flip-v','上下に反転']]],
   ['レイヤー',[['layer-new','新規レイヤー'],['layer-dup','レイヤーを複製','Ctrl+J'],['layer-del','レイヤーを削除'],'-',['layer-up','上へ移動'],['layer-down','下へ移動'],['merge-down','下のレイヤーと結合','Ctrl+E'],['flatten','画像を統合']]],
   ['フィルター',[['f-bc','明るさ・コントラスト…'],['f-hs','色相・彩度…'],['f-blur','ぼかし（ガウス）…'],['f-sharpen','シャープ…'],['f-posterize','ポスタリゼーション…'],'-',['f-gray','モノクロ'],['f-sepia','セピア'],['f-invert','階調の反転','Ctrl+I']]],
@@ -934,11 +1048,12 @@ function runCmd(c){if(drag)return;if(textEdit&&c!=='undo')commitText();const f=C
 function buildTools(){
   const rail=$('#tools');
   Object.entries(TOOLS).forEach(([id,t],i)=>{
-    if(i===2||i===8)rail.append(el('div','rail-sep'));
+    if(i===3||i===9)rail.append(el('div','rail-sep'));
     const b=el('button','tool',`<svg class="i" viewBox="0 0 24 24">${t.icon}</svg><span class="k">${t.key}</span>`);
     b.dataset.tool=id;b.title=`${t.label}（${t.key.toUpperCase()}）`;b.setAttribute('aria-label',t.label);b.setAttribute('aria-pressed','false');
     b.addEventListener('click',()=>selectTool(id));rail.append(b);
   });
+  refreshToolMeta();
   rail.append(el('div','rail-sep'));
   const cw=el('div','colors');
   const fg=el('button','chip fg');fg.title='描画色';fg.setAttribute('aria-label','描画色を選ぶ');fg.addEventListener('click',()=>$('#fgInput').click());
@@ -948,8 +1063,19 @@ function buildTools(){
   const rs=el('button','mini','<svg class="i" viewBox="0 0 24 24"><rect x="4" y="4" width="9" height="9" fill="currentColor"/><rect x="11" y="11" width="9" height="9"/></svg>');rs.title='初期色に戻す（D）';rs.setAttribute('aria-label','色を初期化');rs.addEventListener('click',resetColors);
   const row=el('div');row.style.cssText='display:flex;gap:2px;margin-top:4px';row.append(sw,rs);rail.append(row);
 }
+function refreshToolMeta(){
+  const m=TOOLS.marquee,l=TOOLS.lasso;
+  m.icon=m.icons[S.marq.shape];m.label=S.marq.shape==='ellipse'?'楕円選択':'長方形選択';
+  l.icon=l.icons[S.lasso.mode];l.label=S.lasso.mode==='poly'?'多角形選択':'なげなわ';l.hint=l.hints[S.lasso.mode];
+  ['marquee','lasso'].forEach(id=>{const b=$(`.tool[data-tool="${id}"]`);if(!b)return;b.querySelector('svg').innerHTML=TOOLS[id].icon;b.title=`${TOOLS[id].label}（${TOOLS[id].key.toUpperCase()}）`;b.setAttribute('aria-label',TOOLS[id].label);});
+  if(S.tool==='marquee'||S.tool==='lasso'){$('#optToolName').textContent=TOOLS[S.tool].label;$('#stHint').textContent=TOOLS[S.tool].hint;}
+  $('#optMarq').value=S.marq.shape;$('#optLasso').value=S.lasso.mode;
+}
+function setMarqShape(v){S.marq.shape=v;refreshToolMeta();}
+function setLassoMode(v){S.lasso.mode=v;cancelPoly();refreshToolMeta();}
 function selectTool(id){
   if(drag)return;if(textEdit&&id!=='text')commitText();
+  if(id!=='lasso'||S.lasso.mode!=='poly')cancelPoly();
   S.tool=id;$$('.tool').forEach(b=>b.setAttribute('aria-pressed',b.dataset.tool===id?'true':'false'));
   syncOptions();updateCursor();$('#stHint').textContent=TOOLS[id].hint;requestRender();
 }
@@ -977,6 +1103,8 @@ $('#optFont').addEventListener('change',e=>{S.text.family=e.target.value;if(text
 $('#optFontSize').addEventListener('input',e=>{const v=parseInt(e.target.value);if(v>0){S.text.size=clamp(v,6,600);if(textEdit)styleText();}});
 $('#optBold').addEventListener('change',e=>{S.text.bold=e.target.checked;if(textEdit)styleText();});
 $('#optPick').addEventListener('change',e=>{S.pick.all=e.target.value==='all';});
+$('#optMarq').addEventListener('change',e=>setMarqShape(e.target.value));
+$('#optLasso').addEventListener('change',e=>setLassoMode(e.target.value));
 
 /* ---------- colors ---------- */
 const SWATCHES=['#000000','#ffffff','#8c94a2','#e5484d','#f76b15','#ffc53d','#46a758','#12a594','#0090ff','#3e63dd','#8e4ec6','#d6409f','#ffe2a8','#f6a35c','#c0607a','#4b3b78','#141b3d','#a18072'];
@@ -1053,10 +1181,16 @@ document.addEventListener('keydown',e=>{
   }
   if(e.key==='Escape'){closeMenus();if(drag)cancelDrag();}
   const t=e.target;if(t&&t.matches&&t.matches('input:not([type=range]):not([type=checkbox]),textarea,select'))return;
+  if(polyDraft&&!e.ctrlKey&&!e.metaKey){
+    if(e.key==='Enter'){e.preventDefault();closePoly();return;}
+    if(e.key==='Escape'){e.preventDefault();cancelPoly();return;}
+    if(e.key==='Backspace'||e.key==='Delete'){e.preventDefault();polyDraft.pts.pop();if(!polyDraft.pts.length)polyDraft=null;requestRender();return;}
+  }
+  if(e.key==='Shift'&&!pointer.shift){pointer.shift=true;if(polyDraft)requestRender();}
   const mod=e.ctrlKey||e.metaKey,k=e.key.toLowerCase();
   if(e.code==='Space'){e.preventDefault();if(!spaceHeld){spaceHeld=true;updateCursor();requestRender();}return;}
   if(mod){
-    const map={z:e.shiftKey?'redo':'undo',y:'redo',a:'select-all',d:'deselect','0':'fit','1':'actual','=':'zoom-in','+':'zoom-in',';':'zoom-in','-':'zoom-out',o:'open',s:'export-png',j:'layer-dup',e:'merge-down',i:'f-invert'};
+    const map={z:e.shiftKey?'redo':'undo',y:'redo',a:'select-all',d:'deselect','0':'fit','1':'actual','=':'zoom-in','+':'zoom-in',';':'zoom-in','-':'zoom-out',o:'open',s:'export-png',j:'layer-dup',e:'merge-down',i:e.shiftKey?'sel-invert':'f-invert'};
     const c=map[k];if(c){e.preventDefault();runCmd(c);}return;
   }
   if(e.altKey&&(e.key==='Backspace'||e.key==='Delete')){e.preventDefault();runCmd('fill-fg');return;}
@@ -1064,9 +1198,15 @@ document.addEventListener('keydown',e=>{
   if(e.key==='['||e.key===']'){if(S.tool==='brush'||S.tool==='eraser'){const s=bset(),st=s.size<10?1:s.size<50?5:10;s.size=clamp(s.size+(e.key===']'?st:-st),1,400);syncOptions();requestRender();}return;}
   if(k==='x'){swapColors();return;}
   if(k==='d'){resetColors();return;}
-  const tool=Object.keys(TOOLS).find(id=>TOOLS[id].key===k);if(tool){selectTool(tool);}
+  const tool=Object.keys(TOOLS).find(id=>TOOLS[id].key===k);
+  if(tool){
+    if(e.shiftKey&&tool==='marquee')setMarqShape(S.marq.shape==='rect'?'ellipse':'rect');
+    if(e.shiftKey&&tool==='lasso')setLassoMode(S.lasso.mode==='free'?'poly':'free');
+    selectTool(tool);
+  }
 });
-document.addEventListener('keyup',e=>{if(e.code==='Space'){spaceHeld=false;updateCursor();requestRender();}});
+document.addEventListener('keyup',e=>{if(e.code==='Space'){spaceHeld=false;updateCursor();requestRender();}if(e.key==='Shift'){pointer.shift=false;if(polyDraft)requestRender();}});
+view.addEventListener('dblclick',e=>{if(polyDraft&&S.tool==='lasso'){e.preventDefault();closePoly();}});
 window.addEventListener('blur',()=>{spaceHeld=false;updateCursor();});
 
 $('#panelToggle').addEventListener('click',()=>{const o=document.body.classList.toggle('panels-open');$('#panelToggle').setAttribute('aria-expanded',o);});
