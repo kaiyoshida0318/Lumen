@@ -815,6 +815,28 @@ function clearSel(){
   const L=activeLayer(),g=L.canvas.getContext('2d');g.save();clipSel(g);g.clearRect(S.sel.x,S.sel.y,S.sel.w,S.sel.h);g.restore();touch(L);pushHistory('消去');
 }
 function fillSel(){const L=activeLayer(),g=L.canvas.getContext('2d'),r=region();g.save();clipSel(g);g.fillStyle=S.fg;g.fillRect(r.x,r.y,r.w,r.h);g.restore();touch(L);pushHistory('描画色で塗りつぶし');}
+/* cut / copy / paste: an internal clipboard keeps position; the system clipboard is written when the browser allows it */
+let clip=null,preferInternal=false,pasteHandled=false;
+function copySel(merged){
+  const r=region();let src;
+  if(merged){if(compDirty){composite();compDirty=false;}src=comp;}else src=activeLayer().canvas;
+  const c=makeCanvas(r.w,r.h),g=c.getContext('2d');g.translate(-r.x,-r.y);clipSel(g);g.drawImage(src,0,0);
+  clip={canvas:c,x:r.x,y:r.y};preferInternal=true;
+  try{if(navigator.clipboard&&navigator.clipboard.write&&window.ClipboardItem){
+    navigator.clipboard.write([new ClipboardItem({'image/png':new Promise(res=>c.toBlob(res,'image/png'))})]).catch(()=>{});}}catch(_){}
+}
+function cutSel(){
+  const L=activeLayer();if(!L.visible){toast('非表示のレイヤーからは切り取れません');return;}
+  copySel(false);const r=region(),g=L.canvas.getContext('2d');g.save();clipSel(g);g.clearRect(r.x,r.y,r.w,r.h);g.restore();
+  touch(L);pushHistory('切り取り');toast('切り取りました。Ctrl+V で新しいレイヤーに貼り付けます');
+}
+function pasteInternal(){
+  if(!clip){toast('ほかのアプリの画像は Ctrl+V で貼り付けてください');return;}
+  const c=clip.canvas;let x=clip.x,y=clip.y;
+  if(x<0||y<0||x+c.width>S.w||y+c.height>S.h){x=Math.round((S.w-c.width)/2);y=Math.round((S.h-c.height)/2);}
+  const L=addLayer('貼り付け');L.canvas.getContext('2d').drawImage(c,x,y);touch(L);S.sel=null;pushHistory('ペースト');
+}
+window.addEventListener('focus',()=>{preferInternal=false;});
 function invertSel(){
   if(!S.sel){toast('反転する選択範囲がありません');return;}
   const s=finalizeSel({...S.sel,inv:!S.sel.inv});S.sel=s;requestRender();updateStatus();
@@ -924,7 +946,12 @@ $('#filePlace').addEventListener('change',e=>{const f=e.target.files[0];e.target
 stage.addEventListener('dragover',e=>{if([...(e.dataTransfer?.types||[])].includes('Files')){e.preventDefault();stage.classList.add('dragover');}});
 stage.addEventListener('dragleave',e=>{if(e.target===stage||!stage.contains(e.relatedTarget))stage.classList.remove('dragover');});
 stage.addEventListener('drop',e=>{e.preventDefault();stage.classList.remove('dragover');const f=[...e.dataTransfer.files].find(f=>f.type.startsWith('image/'));if(f)placeFile(f);else toast('画像ファイルをドロップしてください');});
-document.addEventListener('paste',e=>{if(e.target.matches&&e.target.matches('input,textarea'))return;const it=[...(e.clipboardData?.items||[])].find(i=>i.type.startsWith('image/'));if(it){e.preventDefault();placeFile(it.getAsFile());}});
+document.addEventListener('paste',e=>{
+  if(e.target.matches&&e.target.matches('input,textarea'))return;pasteHandled=true;
+  const it=[...(e.clipboardData?.items||[])].find(i=>i.type.startsWith('image/'));
+  if(clip&&(preferInternal||!it)){e.preventDefault();pasteInternal();return;}
+  if(it){e.preventDefault();placeFile(it.getAsFile());}
+});
 
 async function exportImage(type){
   if(compDirty){composite();compDirty=false;}
@@ -999,6 +1026,7 @@ const CMD={
   'select-all':()=>{cancelPoly();S.sel=makeRectSel(0,0,S.w,S.h);requestRender();updateStatus();},
   'deselect':()=>{cancelPoly();S.sel=null;requestRender();updateStatus();},
   'sel-invert':invertSel,
+  'cut':cutSel,'copy':()=>{copySel(false);toast('コピーしました');},'copy-merged':()=>{copySel(true);toast('表示中の全レイヤーを結合してコピーしました');},'paste':pasteInternal,
   'tool-rect':()=>{setMarqShape('rect');selectTool('marquee');},'tool-ellipse':()=>{setMarqShape('ellipse');selectTool('marquee');},
   'tool-free':()=>{setLassoMode('free');selectTool('lasso');},'tool-poly':()=>{setLassoMode('poly');selectTool('lasso');},
   'clear':clearSel,'fill-fg':fillSel,
@@ -1015,7 +1043,7 @@ const CMD={
 };
 const MENUS=[
   ['ファイル',[['new','新規作成…'],['open','画像を開く…','Ctrl+O'],['place','レイヤーとして配置…'],'-',['export-png','PNG で書き出し','Ctrl+S'],['export-jpeg','JPEG で書き出し'],['export-webp','WebP で書き出し']]],
-  ['編集',[['undo','取り消し','Ctrl+Z'],['redo','やり直し','Ctrl+Shift+Z'],'-',['clear','選択範囲を消去','Delete'],['fill-fg','描画色で塗りつぶし','Alt+Delete']]],
+  ['編集',[['undo','取り消し','Ctrl+Z'],['redo','やり直し','Ctrl+Shift+Z'],'-',['cut','切り取り','Ctrl+X'],['copy','コピー','Ctrl+C'],['copy-merged','結合部分をコピー','Ctrl+Shift+C'],['paste','ペースト','Ctrl+V'],'-',['clear','選択範囲を消去','Delete'],['fill-fg','描画色で塗りつぶし','Alt+Delete']]],
   ['選択範囲',[['select-all','すべてを選択','Ctrl+A'],['deselect','選択を解除','Ctrl+D'],['sel-invert','選択範囲を反転','Ctrl+Shift+I'],'-',['tool-rect','長方形選択','M'],['tool-ellipse','楕円選択','Shift+M'],['tool-free','なげなわ','L'],['tool-poly','多角形選択','Shift+L']]],
   ['イメージ',[['image-size','画像サイズ…'],['crop','選択範囲で切り抜き'],'-',['rotate-cw','90° 回転（時計回り）'],['rotate-ccw','90° 回転（反時計回り）'],['flip-h','左右に反転'],['flip-v','上下に反転']]],
   ['レイヤー',[['layer-new','新規レイヤー'],['layer-dup','レイヤーを複製','Ctrl+J'],['layer-del','レイヤーを削除'],'-',['layer-up','上へ移動'],['layer-down','下へ移動'],['merge-down','下のレイヤーと結合','Ctrl+E'],['flatten','画像を統合']]],
@@ -1190,7 +1218,8 @@ document.addEventListener('keydown',e=>{
   const mod=e.ctrlKey||e.metaKey,k=e.key.toLowerCase();
   if(e.code==='Space'){e.preventDefault();if(!spaceHeld){spaceHeld=true;updateCursor();requestRender();}return;}
   if(mod){
-    const map={z:e.shiftKey?'redo':'undo',y:'redo',a:'select-all',d:'deselect','0':'fit','1':'actual','=':'zoom-in','+':'zoom-in',';':'zoom-in','-':'zoom-out',o:'open',s:'export-png',j:'layer-dup',e:'merge-down',i:e.shiftKey?'sel-invert':'f-invert'};
+    if(k==='v'&&!e.shiftKey){pasteHandled=false;setTimeout(()=>{if(!pasteHandled&&clip)runCmd('paste');},120);return;}
+    const map={x:'cut',c:e.shiftKey?'copy-merged':'copy',z:e.shiftKey?'redo':'undo',y:'redo',a:'select-all',d:'deselect','0':'fit','1':'actual','=':'zoom-in','+':'zoom-in',';':'zoom-in','-':'zoom-out',o:'open',s:'export-png',j:'layer-dup',e:'merge-down',i:e.shiftKey?'sel-invert':'f-invert'};
     const c=map[k];if(c){e.preventDefault();runCmd(c);}return;
   }
   if(e.altKey&&(e.key==='Backspace'||e.key==='Delete')){e.preventDefault();runCmd('fill-fg');return;}

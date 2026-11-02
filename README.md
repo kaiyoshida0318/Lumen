@@ -20,6 +20,7 @@
 | 一時的に手のひら | Space を押しながらドラッグ |
 | ズーム | Ctrl+ホイール、Ctrl+0（全体表示）、Ctrl+1（100%） |
 | 選択解除／選択範囲を反転 | Ctrl+D ／ Ctrl+Shift+I |
+| 切り取り／コピー／結合部分をコピー／ペースト | Ctrl+X ／ Ctrl+C ／ Ctrl+Shift+C ／ Ctrl+V |
 | 描画色と背景色の入れ替え／初期化 | X ／ D |
 
 ## GitHub Pages で公開する
