@@ -22,7 +22,8 @@
 | 開く・保存・書き出し | Ctrl+O / Ctrl+S（PSD） / Alt+Shift+Ctrl+W |
 | 取り消し・やり直し | Ctrl+Z / Shift+Ctrl+Z |
 | カット・コピー・結合部分をコピー・ペースト | Ctrl+X / Ctrl+C / Shift+Ctrl+C / Ctrl+V |
-| 自由変形 | Ctrl+T（Enter で確定、Esc でキャンセル） |
+| 自由変形 | Alt+T（全画面表示中は Ctrl+T）、右クリックメニューからも可。Enter で確定、Esc でキャンセル |
+| 全画面表示 | F（Chrome ではこの間 Ctrl+T・Ctrl+W・Ctrl+N・Ctrl+Tab をエディタ側で使えます。Esc 長押しで終了） |
 | 選択 | Ctrl+A すべて / Ctrl+D 解除 / Shift+Ctrl+D 再選択 / Shift+Ctrl+I 反転 / Shift+F6 境界をぼかす |
 | 選択の追加・削除・共通 | Shift / Alt / Shift+Alt を押しながら選択 |
 | レイヤー | Ctrl+J 選択範囲をコピーしたレイヤー / Shift+Ctrl+J カットしたレイヤー / Ctrl+E 下と結合 / Shift+Ctrl+E 表示レイヤーを結合 / Ctrl+[ ] 重ね順 |
@@ -34,7 +35,7 @@
 | 移動ツール | 矢印キーで 1px（Shift で 10px） / Alt+ドラッグで複製 / Ctrl+クリックでレイヤーを選択 |
 | 色 | X 入れ替え / D 初期設定 |
 
-ブラウザが予約している Ctrl+N（新規）・Ctrl+W（閉じる）・Ctrl+Tab（ドキュメント切り替え）は使えないため、メニューとタブから操作します。
+Ctrl+T・Ctrl+N・Ctrl+W・Ctrl+Tab はブラウザが先に使うため、通常表示では効きません。自由変形は Alt+T、それ以外はメニューとタブから操作するか、F キーで全画面表示にすると Photoshop と同じキーで使えます。
 
 ## GitHub Pages で公開する
 

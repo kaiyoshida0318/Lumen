@@ -267,7 +267,7 @@ input[type=color]::-webkit-color-swatch{border:0;border-radius:3px}
   <div class="opt" data-for="move">
     <label class="check"><input type="checkbox" id="optAuto"> 自動選択</label>
     <button class="btn" data-cmd="transform">自由変形</button>
-    <span class="note">Ctrl+クリックでレイヤーを選択、Alt+ドラッグで複製、矢印キーで 1px 移動</span>
+    <span class="note">自由変形は Alt+T（全画面表示中は Ctrl+T）。Ctrl+クリックでレイヤーを選択、Alt+ドラッグで複製、矢印キーで 1px 移動</span>
   </div>
   <div class="opt" data-for="marquee lasso">
     <div class="seg" role="group" aria-label="選択の方法">
@@ -1047,7 +1047,20 @@ function endPointer(e){
 view.addEventListener('pointerup',endPointer);
 view.addEventListener('pointercancel',e=>{ptrs.delete(e.pointerId);if(ptrs.size<2)pinch=null;if(drag&&e.pointerId===drag.id)cancelDrag();});
 view.addEventListener('pointerleave',()=>{pointer.inside=false;$('#stPos').textContent='';requestRender();});
-view.addEventListener('contextmenu',e=>e.preventDefault());
+const ctxMenu=el('div','menu-list');ctxMenu.setAttribute('role','menu');ctxMenu.setAttribute('aria-label','コンテキストメニュー');document.body.append(ctxMenu);
+view.addEventListener('contextmenu',e=>{
+  e.preventDefault();if(!hasDoc()||drag)return;closeMenus();
+  let items;
+  if(tf)items=[['tf-commit','変形を確定','Enter'],['tf-cancel','変形をキャンセル','Esc'],'-',['tf-fliph','水平方向に反転'],['tf-flipv','垂直方向に反転']];
+  else{items=[['transform','自由変形','Alt+T']];
+    if(S.sel)items.push('-',['deselect','選択を解除','Ctrl+D'],['sel-invert','選択範囲を反転','Shift+Ctrl+I'],['feather','境界をぼかす…','Shift+F6'],'-',['layer-copy','選択範囲をコピーしたレイヤー','Ctrl+J'],['layer-cut','選択範囲をカットしたレイヤー','Shift+Ctrl+J'],['fill-fg','描画色で塗りつぶし','Alt+Delete'],['clear','消去','Delete']);
+    else items.push(['select-all','すべてを選択','Ctrl+A'],['reselect','再選択','Shift+Ctrl+D'],'-',['layer-dup','レイヤーを複製'],['merge-down','下のレイヤーと結合','Ctrl+E']);}
+  ctxMenu.innerHTML='';
+  items.forEach(it=>{if(it==='-'){ctxMenu.append(el('hr'));return;}const[cmd,text,kb]=it,b=el('button');b.dataset.cmd=cmd;b.setAttribute('role','menuitem');const sp=el('span');sp.textContent=text;b.append(sp);if(kb){const k=el('kbd');k.textContent=kb;b.append(k);}ctxMenu.append(b);});
+  ctxMenu.style.display='block';
+  ctxMenu.style.left=Math.min(e.clientX,innerWidth-ctxMenu.offsetWidth-8)+'px';ctxMenu.style.top=Math.min(e.clientY,innerHeight-ctxMenu.offsetHeight-8)+'px';
+  const first=ctxMenu.querySelector('button');if(first)first.focus();
+});
 view.addEventListener('dblclick',e=>{
   if(!hasDoc())return;const p=toDoc(e);
   if(polyDraft&&S.tool==='lasso'){e.preventDefault();closePoly();return;}
@@ -1452,8 +1465,19 @@ function canvasSizeDialog(){
     let c=$('#csC',w).value;if(c==='bg')c=S.bg;if(nw!==S.w||nh!==S.h)canvasSize(nw,nh,ax,ay,c);}});
 }
 
+/* fullscreen: in Chrome, the Keyboard Lock API lets the page receive Ctrl+T / Ctrl+W / Ctrl+N / Ctrl+Tab (hold Esc to leave) */
+async function toggleFullscreen(){
+  try{
+    if(document.fullscreenElement){await document.exitFullscreen();return;}
+    await document.documentElement.requestFullscreen();
+    if(navigator.keyboard&&navigator.keyboard.lock){await navigator.keyboard.lock();toast('全画面表示：Ctrl+T などのショートカットが使えます。Esc を長押しで終了');}
+    else toast('全画面表示にしました。F キーで元に戻ります');
+  }catch(_){toast('この表示では全画面表示にできません。GitHub Pages 版など通常のブラウザで開いてお試しください');}
+}
+document.addEventListener('fullscreenchange',()=>{if(!document.fullscreenElement&&navigator.keyboard&&navigator.keyboard.unlock)navigator.keyboard.unlock();});
+
 /* ================= commands & menus ================= */
-const NO_DOC_OK=new Set(['new','open','close-all','paste']);
+const NO_DOC_OK=new Set(['new','open','close-all','paste','fullscreen']);
 const CMD={
   'new':newDocDialog,'open':()=>$('#fileOpen').click(),'place':()=>$('#filePlace').click(),
   'close':()=>closeDoc(cur),'close-all':closeAll,
@@ -1477,16 +1501,17 @@ const CMD={
   'tool-rect':()=>{setMarqShape('rect');selectTool('marquee');},'tool-ellipse':()=>{setMarqShape('ellipse');selectTool('marquee');},
   'tool-free':()=>{setLassoMode('free');selectTool('lasso');},'tool-poly':()=>{setLassoMode('poly');selectTool('lasso');},
   'crop-commit':commitCrop,'crop-reset':resetCrop,
+  'fullscreen':toggleFullscreen,'doc-next':()=>docs.length>1&&switchDoc((cur+1)%docs.length),'doc-prev':()=>docs.length>1&&switchDoc((cur-1+docs.length)%docs.length),
   'zoom-in':()=>stepZoom(1),'zoom-out':()=>stepZoom(-1),'fit':fitView,'actual':actualSize,
 };
 const MENUS=[
   ['ファイル',[['new','新規…'],['open','開く…','Ctrl+O'],['place','埋め込みを配置…'],'-',['close','閉じる'],['close-all','すべてを閉じる'],'-',['save-psd','保存（PSD）','Ctrl+S'],['export','書き出し形式…','Alt+Shift+Ctrl+W'],['export-png','PNG としてクイック書き出し']]],
-  ['編集',[['undo','取り消し','Ctrl+Z'],['redo','やり直し','Shift+Ctrl+Z'],'-',['cut','カット','Ctrl+X'],['copy','コピー','Ctrl+C'],['copy-merged','結合部分をコピー','Shift+Ctrl+C'],['paste','ペースト','Ctrl+V'],'-',['fill-fg','描画色で塗りつぶし','Alt+Delete'],['fill-bg','背景色で塗りつぶし','Ctrl+Delete'],['clear','消去','Delete'],'-',['transform','自由変形','Ctrl+T']]],
+  ['編集',[['undo','取り消し','Ctrl+Z'],['redo','やり直し','Shift+Ctrl+Z'],'-',['cut','カット','Ctrl+X'],['copy','コピー','Ctrl+C'],['copy-merged','結合部分をコピー','Shift+Ctrl+C'],['paste','ペースト','Ctrl+V'],'-',['fill-fg','描画色で塗りつぶし','Alt+Delete'],['fill-bg','背景色で塗りつぶし','Ctrl+Delete'],['clear','消去','Delete'],'-',['transform','自由変形','Ctrl+T / Alt+T']]],
   ['イメージ',[['#','色調補正'],['f-bc','明るさ・コントラスト…'],['f-hs','色相・彩度…','Ctrl+U'],['f-gray','彩度を下げる','Shift+Ctrl+U'],['f-invert','階調の反転','Ctrl+I'],['f-posterize','ポスタリゼーション…'],['f-sepia','セピア'],'-',['image-size','画像解像度…','Alt+Ctrl+I'],['canvas-size','カンバスサイズ…','Alt+Ctrl+C'],'-',['#','画像の回転'],['rotate-180','180°'],['rotate-cw','90°（時計回り）'],['rotate-ccw','90°（反時計回り）'],['flip-h','カンバスを左右に反転'],['flip-v','カンバスを上下に反転'],'-',['crop-sel','切り抜き（選択範囲）']]],
   ['レイヤー',[['layer-new','新規レイヤー'],['layer-dup','レイヤーを複製'],['layer-copy','選択範囲をコピーしたレイヤー','Ctrl+J'],['layer-cut','選択範囲をカットしたレイヤー','Shift+Ctrl+J'],['layer-del','レイヤーを削除'],'-',['#','重ね順'],['layer-top','最前面へ','Shift+Ctrl+]'],['layer-up','前面へ','Ctrl+]'],['layer-down','背面へ','Ctrl+['],['layer-bottom','最背面へ','Shift+Ctrl+['],'-',['merge-down','下のレイヤーと結合','Ctrl+E'],['merge-visible','表示レイヤーを結合','Shift+Ctrl+E'],['flatten','画像を統合']]],
   ['選択範囲',[['select-all','すべてを選択','Ctrl+A'],['deselect','選択を解除','Ctrl+D'],['reselect','再選択','Shift+Ctrl+D'],['sel-invert','選択範囲を反転','Shift+Ctrl+I'],'-',['feather','境界をぼかす…','Shift+F6'],'-',['tool-rect','長方形選択','M'],['tool-ellipse','楕円形選択','Shift+M'],['tool-free','なげなわ','L'],['tool-poly','多角形選択','Shift+L']]],
   ['フィルター',[['f-blur','ぼかし（ガウス）…'],['f-sharpen','シャープ…']]],
-  ['表示',[['zoom-in','ズームイン','Ctrl++'],['zoom-out','ズームアウト','Ctrl+-'],['fit','画面サイズに合わせる','Ctrl+0'],['actual','100%','Ctrl+1']]],
+  ['表示',[['zoom-in','ズームイン','Ctrl++'],['zoom-out','ズームアウト','Ctrl+-'],['fit','画面サイズに合わせる','Ctrl+0'],['actual','100%','Ctrl+1'],'-',['fullscreen','全画面表示（Ctrl+T などが使えます）','F']]],
   ['ウィンドウ',[]],
 ];
 function buildMenus(){
@@ -1516,8 +1541,8 @@ function openMenu(m){
   const r=m.firstChild.getBoundingClientRect(),list=m.lastChild;
   list.style.top=(r.bottom+3)+'px';list.style.left=Math.max(8,Math.min(r.left,innerWidth-list.offsetWidth-8))+'px';
 }
-function closeMenus(){$$('.menu.open').forEach(m=>{m.classList.remove('open');m.firstChild.setAttribute('aria-expanded','false');});}
-document.addEventListener('pointerdown',e=>{if(!e.target.closest('.menu'))closeMenus();});
+function closeMenus(){if(typeof ctxMenu!=='undefined')ctxMenu.style.display='none';$$('.menu.open').forEach(m=>{m.classList.remove('open');m.firstChild.setAttribute('aria-expanded','false');});}
+document.addEventListener('pointerdown',e=>{if(!e.target.closest('.menu')&&!ctxMenu.contains(e.target))closeMenus();});
 document.addEventListener('click',e=>{const b=e.target.closest('[data-cmd]');if(!b||b.getAttribute('aria-disabled')==='true')return;closeMenus();runCmd(b.dataset.cmd);});
 const TF_SAFE=new Set(['tf-commit','tf-cancel','tf-fliph','tf-flipv','undo','zoom-in','zoom-out','fit','actual']);
 function runCmd(c){
@@ -1748,6 +1773,9 @@ document.addEventListener('keydown',e=>{
     else if(k==='j')c=sh?'layer-cut':'layer-copy';
     else if(k==='e')c=sh?'merge-visible':'merge-down';
     else if(k==='t')c='transform';
+    else if(k==='n')c=sh?'layer-new':'new';
+    else if(k==='w')c='close';
+    else if(e.key==='Tab')c=sh?'doc-prev':'doc-next';
     else if(k==='s')c='save-psd';
     else if(k==='o')c='open';
     else if(k==='0')c='fit';
@@ -1761,6 +1789,7 @@ document.addEventListener('keydown',e=>{
     return;
   }
   if(!hasDoc()&&!['x','d'].includes(k)&&!Object.values(TOOLS).some(t=>t.key===k))return;
+  if(e.altKey&&e.code==='KeyT'){e.preventDefault();runCmd('transform');return;}
   if(e.altKey&&(e.key==='Backspace'||e.key==='Delete')){e.preventDefault();runCmd('fill-fg');return;}
   if(e.key==='Backspace'||e.key==='Delete'){e.preventDefault();runCmd('clear');return;}
   if('[]{}'.includes(e.key)&&e.key.length===1){
@@ -1776,6 +1805,7 @@ document.addEventListener('keydown',e=>{
     else{activeLayer().opacity=v/100;compDirty=true;pushHistory('不透明度を変更');toast(`レイヤーの不透明度 ${v}%`);}
     return;
   }
+  if(k==='f'&&!e.altKey&&!e.shiftKey){runCmd('fullscreen');return;}
   if(k==='x'){swapColors();return;}
   if(k==='d'){resetColors();return;}
   if(k==='m'){if(e.shiftKey&&S.tool==='marquee')setMarqShape(S.marq.shape==='rect'?'ellipse':'rect');selectTool('marquee');return;}
