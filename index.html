@@ -1198,6 +1198,7 @@ view.addEventListener('dblclick',e=>{
   if(!hasDoc())return;const p=toDoc(e);
   if(polyDraft&&S.tool==='lasso'){e.preventDefault();closePoly();return;}
   if(tf){if(tfHit(p).type==='move')commitTransform();return;}
+  if(S.tool==='move'&&!textEdit){const TL=textLayerAt(p);if(TL){e.preventDefault();selectTool('text');editTextLayer(TL);return;}}
   if(S.tool==='crop'&&cropBox&&cropHit(p).type==='move')commitCrop();
 });
 view.addEventListener('wheel',e=>{
