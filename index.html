@@ -1459,18 +1459,24 @@ function copySel(merged){
   const c=makeCanvas(r.w,r.h),g=c.getContext('2d');g.drawImage(src,-r.x,-r.y);
   if(S.sel){g.globalCompositeOperation='destination-in';g.drawImage(S.sel.mask,-r.x,-r.y);}
   clip={canvas:c,x:r.x,y:r.y};preferInternal=true;
+  const A=activeLayer();if(!merged&&!S.sel&&A.text)Object.assign(clip,{text:{...A.text},name:A.name,opacity:A.opacity,blend:A.blend});
   try{if(navigator.clipboard&&navigator.clipboard.write&&window.ClipboardItem){
     navigator.clipboard.write([new ClipboardItem({'image/png':new Promise(res=>c.toBlob(res,'image/png'))})]).catch(()=>{});}}catch(_){}
 }
 function cutSel(){
   const L=activeLayer();if(!L.visible){toast('非表示のレイヤーからは切り取れません');return;}
-  copySel(false);const g=L.canvas.getContext('2d');
+  copySel(false);
+  if(L.text&&!S.sel&&S.layers.length>1){S.layers.splice(S.active,1);S.active=Math.max(0,S.active-1);compDirty=true;pushHistory('切り取り');return;}
+  const g=L.canvas.getContext('2d');
   if(S.sel){g.save();g.globalCompositeOperation='destination-out';g.drawImage(S.sel.mask,0,0);g.restore();}else g.clearRect(0,0,S.w,S.h);
   rasterize(L);touch(L);pushHistory('切り取り');
 }
 function pasteInternal(){
   if(!clip){toast('ほかのアプリの画像は Ctrl+V で貼り付けてください');return;}
   if(!hasDoc()){const c=clip.canvas,L=newLayer('背景',c.width,c.height);L.canvas.getContext('2d').drawImage(c,0,0);addDoc({name:nextUntitled(),w:c.width,h:c.height,layers:[L],hist:'クリップボードから新規'});return;}
+  if(clip.text){const t={...clip.text},b=textLayout(t).box;
+    if(b.x+b.w<=0||b.y+b.h<=0||b.x>=S.w||b.y>=S.h){t.x+=Math.round(S.w/2-(b.x+b.w/2));t.y+=Math.round(S.h/2-(b.y+b.h/2));}
+    const L=addLayer(clip.name);L.text=t;L.opacity=clip.opacity;L.blend=clip.blend;renderText(L);S.sel=null;pushHistory('ペースト');return;}
   const c=clip.canvas;let x=clip.x,y=clip.y;
   if(x<0||y<0||x+c.width>S.w||y+c.height>S.h){x=Math.round((S.w-c.width)/2);y=Math.round((S.h-c.height)/2);}
   const L=addLayer('レイヤー '+(++layerNo));L.canvas.getContext('2d').drawImage(c,x,y);touch(L);S.sel=null;pushHistory('ペースト');
@@ -1811,7 +1817,7 @@ const MENUS=[
   ['ファイル',[['new','新規…'],['open','開く…','Ctrl+O'],['place','埋め込みを配置…'],'-',['close','閉じる'],['close-all','すべてを閉じる'],'-',['save-psd','保存（PSD）','Ctrl+S'],['export','書き出し形式…','Alt+Shift+Ctrl+W'],['export-png','PNG としてクイック書き出し']]],
   ['編集',[['undo','取り消し','Ctrl+Z'],['redo','やり直し','Shift+Ctrl+Z'],'-',['cut','カット','Ctrl+X'],['copy','コピー','Ctrl+C'],['copy-merged','結合部分をコピー','Shift+Ctrl+C'],['paste','ペースト','Ctrl+V'],'-',['fill-fg','描画色で塗りつぶし','Alt+Delete'],['fill-bg','背景色で塗りつぶし','Ctrl+Delete'],['clear','消去','Delete'],'-',['transform','自由変形','Ctrl+T / Alt+T']]],
   ['イメージ',[['#','色調補正'],['f-bc','明るさ・コントラスト…'],['f-hs','色相・彩度…','Ctrl+U'],['f-gray','彩度を下げる','Shift+Ctrl+U'],['f-invert','階調の反転','Ctrl+I'],['f-posterize','ポスタリゼーション…'],['f-sepia','セピア'],'-',['image-size','画像解像度…','Alt+Ctrl+I'],['canvas-size','カンバスサイズ…','Alt+Ctrl+C'],'-',['#','画像の回転'],['rotate-180','180°'],['rotate-cw','90°（時計回り）'],['rotate-ccw','90°（反時計回り）'],['flip-h','カンバスを左右に反転'],['flip-v','カンバスを上下に反転'],'-',['crop-sel','切り抜き（選択範囲）']]],
-  ['レイヤー',[['layer-new','新規レイヤー'],['layer-dup','レイヤーを複製'],['layer-copy','選択範囲をコピーしたレイヤー','Ctrl+J'],['layer-cut','選択範囲をカットしたレイヤー','Shift+Ctrl+J'],['layer-del','レイヤーを削除'],['rasterize','テキストをラスタライズ'],'-',['#','重ね順'],['layer-top','最前面へ','Shift+Ctrl+]'],['layer-up','前面へ','Ctrl+]'],['layer-down','背面へ','Ctrl+['],['layer-bottom','最背面へ','Shift+Ctrl+['],'-',['merge-down','下のレイヤーと結合','Ctrl+E'],['merge-visible','表示レイヤーを結合','Shift+Ctrl+E'],['flatten','画像を統合']]],
+  ['レイヤー',[['layer-new','新規レイヤー'],['layer-dup','レイヤーを複製'],['layer-copy','選択範囲をコピーしたレイヤー','Ctrl+J'],['layer-cut','選択範囲をカットしたレイヤー','Shift+Ctrl+J'],['layer-del','レイヤーを削除','Delete'],['rasterize','テキストをラスタライズ'],'-',['#','重ね順'],['layer-top','最前面へ','Shift+Ctrl+]'],['layer-up','前面へ','Ctrl+]'],['layer-down','背面へ','Ctrl+['],['layer-bottom','最背面へ','Shift+Ctrl+['],'-',['merge-down','下のレイヤーと結合','Ctrl+E'],['merge-visible','表示レイヤーを結合','Shift+Ctrl+E'],['flatten','画像を統合']]],
   ['選択範囲',[['select-all','すべてを選択','Ctrl+A'],['deselect','選択を解除','Ctrl+D'],['reselect','再選択','Shift+Ctrl+D'],['sel-invert','選択範囲を反転','Shift+Ctrl+I'],'-',['feather','境界をぼかす…','Shift+F6'],'-',['tool-rect','長方形選択','M'],['tool-ellipse','楕円形選択','Shift+M'],['tool-free','なげなわ','L'],['tool-poly','多角形選択','Shift+L'],['tool-wand','自動選択ツール','W'],['tool-quick','クイック選択ツール','Shift+W']]],
   ['フィルター',[['f-blur','ぼかし（ガウス）…'],['f-sharpen','シャープ…']]],
   ['表示',[['zoom-in','ズームイン','Ctrl++'],['zoom-out','ズームアウト','Ctrl+-'],['fit','画面サイズに合わせる','Ctrl+0'],['actual','100%','Ctrl+1'],'-',['fullscreen','全画面表示（Ctrl+T などが使えます）','F']]],
@@ -2143,7 +2149,7 @@ document.addEventListener('keydown',e=>{
   if(!hasDoc()&&!['x','d'].includes(k)&&!Object.values(TOOLS).some(t=>t.key===k))return;
   if(e.altKey&&e.code==='KeyT'){e.preventDefault();runCmd('transform');return;}
   if(e.altKey&&(e.key==='Backspace'||e.key==='Delete')){e.preventDefault();runCmd('fill-fg');return;}
-  if(e.key==='Backspace'||e.key==='Delete'){e.preventDefault();runCmd('clear');return;}
+  if(e.key==='Backspace'||e.key==='Delete'){e.preventDefault();runCmd(S.sel?'clear':'layer-del');return;}
   if('[]{}'.includes(e.key)&&e.key.length===1){
     if(S.tool==='wand'&&S.wand.mode==='quick'){const up=e.key===']'||e.key==='}',st=S.wand.size<20?2:S.wand.size<60?5:10;S.wand.size=clamp(S.wand.size+(up?st:-st),2,300);syncOptions();requestRender();return;}
     if(S.tool==='brush'||S.tool==='eraser'){const s=bset(),up=e.key===']'||e.key==='}';
