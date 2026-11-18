@@ -497,7 +497,7 @@ function updateCurTab(){const t=$('#tabs').children[cur];if(t&&hasDoc()){const s
 function snapshot(){
   return{w:S.w,h:S.h,active:S.active,sel:S.sel,name:S.name,
     layers:S.layers.map(L=>{let c=snapCache.get(L.id);if(!c||c.rev!==L.rev){c={rev:L.rev,canvas:cloneCanvas(L.canvas)};snapCache.set(L.id,c);}
-      return{id:L.id,name:L.name,visible:L.visible,opacity:L.opacity,blend:L.blend,rev:L.rev,text:L.text?{...L.text}:null,canvas:c.canvas};})};
+      return{id:L.id,name:L.name,visible:L.visible,opacity:L.opacity,blend:L.blend,rev:L.rev,text:L.text?{...L.text}:null,off:L.off||null,canvas:c.canvas};})};
 }
 function pushHistory(name){
   H.stack.length=H.index+1;H.stack.push({id:histSeq++,name,snap:snapshot()});
@@ -509,7 +509,7 @@ function restore(i){
   if(!hasDoc()||i<0||i>=H.stack.length||drag)return;
   finishTransient(false);
   const s=H.stack[i].snap;S.w=s.w;S.h=s.h;S.name=s.name;S.active=s.active;S.sel=s.sel;S.override=null;
-  S.layers=s.layers.map(l=>{snapCache.set(l.id,{rev:l.rev,canvas:l.canvas});return{id:l.id,name:l.name,visible:l.visible,opacity:l.opacity,blend:l.blend,rev:l.rev,text:l.text?{...l.text}:null,canvas:cloneCanvas(l.canvas)};});
+  S.layers=s.layers.map(l=>{snapCache.set(l.id,{rev:l.rev,canvas:l.canvas});return{id:l.id,name:l.name,visible:l.visible,opacity:l.opacity,blend:l.blend,rev:l.rev,text:l.text?{...l.text}:null,off:l.off||null,canvas:cloneCanvas(l.canvas)};});
   H.index=i;if(S.tool==='crop')resetCrop();compDirty=true;refreshAll();
 }
 const undo=()=>{if(tf){cancelTransform();return;}if(H.index>0)restore(H.index-1);};
@@ -859,8 +859,10 @@ function opaqueBounds(c){
 function startTransform(){
   if(!hasDoc()||tf)return;finishTransient(true);
   const L=activeLayer();if(!L.visible){toast('非表示のレイヤーは変形できません');return;}
-  const r=S.sel?region():opaqueBounds(L.canvas);if(!r){toast('変形できるピクセルがありません');return;}
-  const src=makeCanvas(r.w,r.h),sg=src.getContext('2d');sg.drawImage(L.canvas,-r.x,-r.y);
+  const full=(!S.sel&&!L.text&&L.off)?layerFull(L):null,fx=full?full.x:0,fy=full?full.y:0,fc=full?full.canvas:L.canvas;
+  let r=S.sel?region():opaqueBounds(fc);if(!r){toast('変形できるピクセルがありません');return;}
+  if(full)r={x:r.x+fx,y:r.y+fy,w:r.w,h:r.h};
+  const src=makeCanvas(r.w,r.h),sg=src.getContext('2d');sg.drawImage(fc,fx-r.x,fy-r.y);
   const base=cloneCanvas(L.canvas),bg=base.getContext('2d');let smask=null;
   if(S.sel){sg.globalCompositeOperation='destination-in';sg.drawImage(S.sel.mask,-r.x,-r.y);bg.globalCompositeOperation='destination-out';bg.drawImage(S.sel.mask,0,0);
     smask=makeCanvas(r.w,r.h);smask.getContext('2d').drawImage(S.sel.mask,-r.x,-r.y);}
@@ -876,8 +878,14 @@ function commitTransform(){
   if(L.text){
     if(!tf.smask&&Math.abs(tf.rot)<1e-9&&tf.sx===tf.sy&&tf.sx>0){
       const t=L.text,k=tf.sx;L.text={...t,x:tf.cx+(t.x-tf.cx0)*k,y:tf.cy+(t.y-tf.cy0)*k,size:Math.max(1,t.size*k)};
-      if(k!==1){tf=null;S.override=null;liveFn=null;renderText(L);pushHistory('自由変形');syncOptions();updateCursor();return;}
+      {tf=null;S.override=null;liveFn=null;renderText(L);pushHistory('自由変形');syncOptions();updateCursor();return;}
     }else rasterize(L);
+  }
+  if(!tf.smask){
+    L.off=null;const cs=[[-1,-1],[1,-1],[1,1],[-1,1]].map(([a,b])=>tfCorner(a,b)),xs=cs.map(c=>c[0]),ys=cs.map(c=>c[1]);
+    const bx=Math.floor(Math.min(...xs))-1,by=Math.floor(Math.min(...ys))-1,bw=Math.ceil(Math.max(...xs))-bx+1,bh=Math.ceil(Math.max(...ys))-by+1;
+    if(bw*bh<=6e7){const c=makeCanvas(bw,bh),g=c.getContext('2d');g.translate(-bx,-by);tfApply(g,tf.src);
+      tf=null;S.override=null;liveFn=null;setLayerFull(L,{canvas:c,x:bx,y:by},S.w,S.h);pushHistory('自由変形');syncOptions();updateCursor();return;}
   }
   if(tf.smask){const m=newMask(),g=m.getContext('2d');tfApply(g,tf.smask);S.sel=makeSel(m);}
   tf=null;commitOverride('自由変形');syncOptions();updateCursor();
@@ -1028,9 +1036,10 @@ const HANDLERS={
         base=cloneCanvas(L.canvas);if(!dup){const bg=base.getContext('2d');bg.globalCompositeOperation='destination-out';bg.drawImage(sel.mask,0,0);}
         return{start:p,dx:0,dy:0,fl,base,ox:r.x,oy:r.y,hasSel:true,dup};
       }
-      if(dup){dupLayer=newLayer(L.name+' のコピー');dupLayer.canvas.getContext('2d').drawImage(L.canvas,0,0);Object.assign(dupLayer,{opacity:L.opacity,blend:L.blend,text:L.text?{...L.text}:null});
+      if(dup){dupLayer=newLayer(L.name+' のコピー');dupLayer.canvas.getContext('2d').drawImage(L.canvas,0,0);Object.assign(dupLayer,{opacity:L.opacity,blend:L.blend,text:L.text?{...L.text}:null,off:L.off||null});
         S.layers.splice(S.active+1,0,dupLayer);S.active++;touch(dupLayer);refreshLayers();L=dupLayer;}
-      return{start:p,dx:0,dy:0,fl:cloneCanvas(L.canvas),base:null,ox:0,oy:0,hasSel:false,dup,dupLayer};
+      const f=L.text?{canvas:cloneCanvas(L.canvas),x:0,y:0}:layerFull(L);
+      return{start:p,dx:0,dy:0,fl:f.canvas,base:null,ox:f.x,oy:f.y,hasSel:false,dup,dupLayer};
     },
     move(p,e,d){
       let dx=Math.round(p.x-d.start.x),dy=Math.round(p.y-d.start.y);
@@ -1040,8 +1049,12 @@ const HANDLERS={
     },
     up(p,e,d){
       if(!d.dx&&!d.dy){cancelOverride();if(d.dupLayer){S.layers.splice(S.active,1);S.active--;compDirty=true;refreshLayers();}return;}
-      const ML=activeLayer();if(d.hasSel){rasterize(ML);S.sel=translateSel(S.sel,d.dx,d.dy);}else if(ML.text)ML.text={...ML.text,x:ML.text.x+d.dx,y:ML.text.y+d.dy};
-      commitOverride(d.dup?'複製して移動':'移動');
+      const ML=activeLayer(),nm=d.dup?'複製して移動':'移動';
+      if(d.hasSel){rasterize(ML);S.sel=translateSel(S.sel,d.dx,d.dy);commitOverride(nm);return;}
+      liveFn=null;S.override=null;
+      if(ML.text){ML.text={...ML.text,x:ML.text.x+d.dx,y:ML.text.y+d.dy};renderText(ML);}
+      else setLayerFull(ML,{canvas:d.fl,x:d.ox+d.dx,y:d.oy+d.dy},S.w,S.h);
+      pushHistory(nm);
     }
   },
   marquee:{
@@ -1340,11 +1353,27 @@ function finishTransient(commit){
 }
 
 /* ================= layers ================= */
+/* L.off = {canvas,x,y}: the layer's whole content when part of it lies outside the canvas.
+   Inside the canvas L.canvas is always the truth; off only supplies the hidden outside part. */
+function layerFull(L){
+  if(!L.off)return{canvas:cloneCanvas(L.canvas),x:0,y:0};
+  const o=L.off,x0=Math.min(0,o.x),y0=Math.min(0,o.y),x1=Math.max(S.w,o.x+o.canvas.width),y1=Math.max(S.h,o.y+o.canvas.height);
+  const c=makeCanvas(x1-x0,y1-y0),g=c.getContext('2d');g.drawImage(o.canvas,o.x-x0,o.y-y0);g.clearRect(-x0,-y0,S.w,S.h);g.drawImage(L.canvas,-x0,-y0);
+  return{canvas:c,x:x0,y:y0};
+}
+function setLayerFull(L,f,w,h){
+  const b=opaqueBounds(f.canvas),c=makeCanvas(w,h);if(b)c.getContext('2d').drawImage(f.canvas,f.x,f.y);
+  L.canvas=c;L.off=null;
+  if(b&&(f.x+b.x<0||f.y+b.y<0||f.x+b.x+b.w>w||f.y+b.y+b.h>h)&&b.w*b.h<=6e7){
+    const t=makeCanvas(b.w,b.h);t.getContext('2d').drawImage(f.canvas,-b.x,-b.y);L.off={canvas:t,x:f.x+b.x,y:f.y+b.y};}
+  touch(L);
+}
+function dropOff(){S.layers.forEach(L=>{L.off=null;});}
 function addLayer(name,atTop){
   const L=newLayer(name||`レイヤー ${++layerNo}`);
   const at=atTop?S.layers.length:S.active+1;S.layers.splice(at,0,L);S.active=at;touch(L);return L;
 }
-function duplicateLayer(){const s=activeLayer();const L=newLayer(s.name+' のコピー');L.canvas.getContext('2d').drawImage(s.canvas,0,0);Object.assign(L,{opacity:s.opacity,blend:s.blend,visible:s.visible,text:s.text?{...s.text}:null});S.layers.splice(S.active+1,0,L);S.active++;touch(L);pushHistory('レイヤーを複製');}
+function duplicateLayer(){const s=activeLayer();const L=newLayer(s.name+' のコピー');L.canvas.getContext('2d').drawImage(s.canvas,0,0);Object.assign(L,{opacity:s.opacity,blend:s.blend,visible:s.visible,text:s.text?{...s.text}:null,off:s.off||null});S.layers.splice(S.active+1,0,L);S.active++;touch(L);pushHistory('レイヤーを複製');}
 function layerViaCopy(cut){
   if(!S.sel){if(cut){toast('先に選択範囲を作ってください');return;}duplicateLayer();return;}
   const src=activeLayer(),L=newLayer(cut?'切り取ったレイヤー':'コピーしたレイヤー'),g=L.canvas.getContext('2d');
@@ -1373,7 +1402,8 @@ function nudge(dx,dy){
   const L=activeLayer();if(!L.visible)return;const g=L.canvas.getContext('2d');
   if(S.sel){rasterize(L);const r=region(),fl=makeCanvas(r.w,r.h),fg=fl.getContext('2d');fg.drawImage(L.canvas,-r.x,-r.y);fg.globalCompositeOperation='destination-in';fg.drawImage(S.sel.mask,-r.x,-r.y);
     g.save();g.globalCompositeOperation='destination-out';g.drawImage(S.sel.mask,0,0);g.restore();g.drawImage(fl,r.x+dx,r.y+dy);S.sel=translateSel(S.sel,dx,dy);}
-  else{const c=cloneCanvas(L.canvas);g.clearRect(0,0,S.w,S.h);g.drawImage(c,dx,dy);if(L.text)L.text={...L.text,x:L.text.x+dx,y:L.text.y+dy};}
+  else if(L.text){L.text={...L.text,x:L.text.x+dx,y:L.text.y+dy};renderText(L);}
+  else{const f=layerFull(L);setLayerFull(L,{canvas:f.canvas,x:f.x+dx,y:f.y+dy},S.w,S.h);}
   touch(L);pushHistory('移動');
 }
 
@@ -1381,20 +1411,21 @@ function nudge(dx,dy){
 function forAllLayers(fn){S.layers.forEach((L,i)=>{const c=fn(L,i);if(c)L.canvas=c;touch(L);});}
 function afterResize(name){S.sel=null;lastSel=null;fitView();if(S.tool==='crop')resetCrop();pushHistory(name);}
 function rotate(dir){
-  rasterizeAll();const ow=S.w,oh=S.h;
+  rasterizeAll();dropOff();const ow=S.w,oh=S.h;
   forAllLayers(L=>{const c=makeCanvas(oh,ow),g=c.getContext('2d');if(dir>0){g.translate(oh,0);g.rotate(Math.PI/2);}else{g.translate(0,ow);g.rotate(-Math.PI/2);}g.drawImage(L.canvas,0,0);return c;});
   S.w=oh;S.h=ow;afterResize(dir>0?'90° 回転（時計回り）':'90° 回転（反時計回り）');
 }
-function rotate180(){rasterizeAll();forAllLayers(L=>{const c=makeCanvas(S.w,S.h),g=c.getContext('2d');g.translate(S.w,S.h);g.rotate(Math.PI);g.drawImage(L.canvas,0,0);return c;});S.sel=null;pushHistory('180° 回転');}
+function rotate180(){rasterizeAll();dropOff();forAllLayers(L=>{const c=makeCanvas(S.w,S.h),g=c.getContext('2d');g.translate(S.w,S.h);g.rotate(Math.PI);g.drawImage(L.canvas,0,0);return c;});S.sel=null;pushHistory('180° 回転');}
 function flip(horiz){
-  rasterizeAll();
+  rasterizeAll();dropOff();
   forAllLayers(L=>{const c=makeCanvas(S.w,S.h),g=c.getContext('2d');g.translate(horiz?S.w:0,horiz?0:S.h);g.scale(horiz?-1:1,horiz?1:-1);g.drawImage(L.canvas,0,0);return c;});
   S.sel=null;pushHistory(horiz?'カンバスを左右に反転':'カンバスを上下に反転');
 }
-function cropTo(r){forAllLayers(L=>{const c=makeCanvas(r.w,r.h);c.getContext('2d').drawImage(L.canvas,-r.x,-r.y);return c;});S.layers.forEach(L=>{if(L.text)L.text={...L.text,x:L.text.x-r.x,y:L.text.y-r.y};});S.w=r.w;S.h=r.h;afterResize('切り抜き');}
+function cropTo(r){forAllLayers(L=>{if(L.text){const c=makeCanvas(r.w,r.h);L.text={...L.text,x:L.text.x-r.x,y:L.text.y-r.y};L.canvas=c;drawTextTo(L);return;}const f=layerFull(L);setLayerFull(L,{canvas:f.canvas,x:f.x-r.x,y:f.y-r.y},r.w,r.h);});S.w=r.w;S.h=r.h;afterResize('切り抜き');}
 function cropToSel(){if(!S.sel){toast('先に選択範囲を作ってください');return;}cropTo(region());}
 function resizeImage(nw,nh){
-  const k=nw/S.w,uni=Math.abs(nh/S.h-k)<.01;if(!uni)rasterizeAll();
+  const k=nw/S.w,ky=nh/S.h,uni=Math.abs(ky-k)<.01;if(!uni)rasterizeAll();
+  S.layers.forEach(L=>{if(L.off&&!L.text){const f=layerFull(L),c=makeCanvas(Math.round(f.canvas.width*k),Math.round(f.canvas.height*ky)),g=c.getContext('2d');g.imageSmoothingQuality='high';g.drawImage(f.canvas,0,0,c.width,c.height);L.off={canvas:c,x:Math.round(f.x*k),y:Math.round(f.y*ky)};}});
   forAllLayers(L=>{const c=makeCanvas(nw,nh),g=c.getContext('2d');g.imageSmoothingQuality='high';g.drawImage(L.canvas,0,0,nw,nh);return c;});
   S.w=nw;S.h=nh;
   if(uni)S.layers.forEach(L=>{if(L.text){L.text={...L.text,x:L.text.x*k,y:L.text.y*k,size:L.text.size*k};renderText(L);}});
@@ -1402,8 +1433,12 @@ function resizeImage(nw,nh){
 }
 function canvasSize(nw,nh,ax,ay,color){
   const ox=Math.round((nw-S.w)*ax),oy=Math.round((nh-S.h)*ay);
-  forAllLayers((L,i)=>{const c=makeCanvas(nw,nh),g=c.getContext('2d');if(i===0&&color!=='transparent'){g.fillStyle=color;g.fillRect(0,0,nw,nh);g.clearRect(ox,oy,S.w,S.h);}g.drawImage(L.canvas,ox,oy);return c;});
-  S.layers.forEach(L=>{if(L.text)L.text={...L.text,x:L.text.x+ox,y:L.text.y+oy};});
+  const ow=S.w,oh=S.h;
+  forAllLayers((L,i)=>{
+    if(L.text){L.text={...L.text,x:L.text.x+ox,y:L.text.y+oy};L.canvas=makeCanvas(nw,nh);drawTextTo(L);}
+    else{const f=layerFull(L);setLayerFull(L,{canvas:f.canvas,x:f.x+ox,y:f.y+oy},nw,nh);}
+    if(i===0&&color!=='transparent'){const g=L.canvas.getContext('2d');g.globalCompositeOperation='destination-over';g.fillStyle=color;g.beginPath();g.rect(0,0,nw,nh);g.rect(ox,oy,ow,oh);g.fill('evenodd');g.globalCompositeOperation='source-over';}
+  });
   S.w=nw;S.h=nh;afterResize('カンバスサイズ');
 }
 function clearSel(){
@@ -1568,7 +1603,7 @@ async function openPsd(file){
   const walk=(list,op,hidden)=>{(list||[]).forEach(c=>{
     if(c.children){walk(c.children,op*(c.opacity??1),hidden||!!c.hidden);return;}
     if(!c.canvas&&(c.adjustment||c.vectorFill)){skipped++;return;}
-    const L=newLayer(c.name||'レイヤー',w,h);if(c.canvas)L.canvas.getContext('2d').drawImage(c.canvas,c.left||0,c.top||0);
+    const L=newLayer(c.name||'レイヤー',w,h);if(c.canvas){const l=c.left||0,t=c.top||0;L.canvas.getContext('2d').drawImage(c.canvas,l,t);if(!c.text&&(l<0||t<0||l+c.canvas.width>w||t+c.canvas.height>h))L.off={canvas:c.canvas,x:l,y:t};}
     L.opacity=clamp((c.opacity??1)*op,0,1);L.visible=!(hidden||c.hidden);const b=fromPsdBlend(c.blendMode);if(b)L.blend=b;else blendFixed++;
     if(c.mask&&c.mask.canvas)masks++;
     if(c.text&&typeof c.text.text==='string'){const tr=c.text.transform||[1,0,0,1,c.left||0,(c.top||0)];
@@ -1597,7 +1632,7 @@ async function savePsd(){
   if(compDirty){composite();compDirty=false;}
   const composite=cloneCanvas(comp);
   const mk=withText=>({width:S.w,height:S.h,canvas:composite,children:S.layers.map(L=>{
-    const c={name:L.name,canvas:L.canvas,left:0,top:0,opacity:L.opacity,hidden:!L.visible,blendMode:toPsdBlend(L.blend)};
+    const f=L.off&&!L.text?layerFull(L):null,c={name:L.name,canvas:f?f.canvas:L.canvas,left:f?f.x:0,top:f?f.y:0,opacity:L.opacity,hidden:!L.visible,blendMode:toPsdBlend(L.blend)};
     if(withText&&L.text){c.text=psdText(L.text);const t=normText(L.text);
       if(t.strokeW>0){const[r,g,b]=hexToRgb(t.strokeColor);c.effects={stroke:[{present:true,showInDialog:true,enabled:true,size:{units:'Pixels',value:t.strokeW},position:'outside',fillType:'color',blendMode:'normal',opacity:1,color:{r,g,b}}]};}}
     return c;})});
