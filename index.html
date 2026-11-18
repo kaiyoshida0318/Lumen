@@ -280,7 +280,7 @@ input[type=color]::-webkit-color-swatch{border:0;border-radius:3px}
   <div class="opt" data-for="move">
     <label class="check"><input type="checkbox" id="optAuto"> 自動選択</label>
     <button class="btn" data-cmd="transform">自由変形</button>
-    <span class="note">自由変形は Alt+T（全画面表示中は Ctrl+T）。Ctrl+クリックでレイヤーを選択、Alt+ドラッグで複製、矢印キーで 1px 移動</span>
+    <span class="note">自由変形は Alt+T（全画面表示中は Ctrl+T）。Ctrl を押している間は自動選択のオン・オフが逆になります。Alt+ドラッグで複製、矢印キーで 1px 移動</span>
   </div>
   <div class="opt" data-for="wand">
     <div class="grp"><label for="optWandMode">方式</label><select id="optWandMode"><option value="wand">自動選択（色をクリック）</option><option value="quick">クイック選択（なぞる）</option></select></div>
@@ -422,7 +422,7 @@ const S={
   pick:{all:true},
   marq:{shape:'rect'},lasso:{mode:'free'},selMode:'new',
   wand:{mode:'wand',tol:32,aa:true,contig:true,all:false,size:30},
-  move:{auto:false},
+  move:{auto:true},
   cropRatio:'free',
 };
 const DOC_KEYS=['name','ext','w','h','layers','active','sel','zoom','panX','panY','lastPt'];
@@ -1028,7 +1028,7 @@ const HANDLERS={
   eraser:{down:brushDown,move:brushMove,up:brushUp},
   move:{
     down(p,e){
-      if((S.move.auto||e.ctrlKey||e.metaKey)&&!S.sel){const i=topLayerAt(p);if(i>=0&&i!==S.active){S.active=i;refreshLayers();updateCurTab();}}
+      if((S.move.auto!==(e.ctrlKey||e.metaKey))&&!S.sel){const i=topLayerAt(p);if(i>=0&&i!==S.active){S.active=i;refreshLayers();updateCurTab();syncOptions();}}
       let L=activeLayer();if(!L.visible){toast('非表示のレイヤーは移動できません');return false;}
       const sel=S.sel,dup=e.altKey;let fl,base=null,dupLayer=null;
       if(sel){
